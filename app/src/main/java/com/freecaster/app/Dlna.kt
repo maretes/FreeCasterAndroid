@@ -2,11 +2,9 @@ package com.freecaster.app
 
 import android.content.Context
 import android.net.wifi.WifiManager
-import android.util.Xml
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import org.xmlpull.v1.XmlPullParser
 import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -36,10 +34,10 @@ object Dlna {
 
     /**
      * Blocking. Calls [onFound] for every new renderer during [timeoutMs].
-     * Returns how many devices answered at all (routers, NAS…): 0 means the network
-     * blocks discovery (client isolation, guest Wi-Fi), not that there are no TVs.
+     * Returns what every device that answered is (IP → name / reason it isn't a TV), for diagnostics.
+     * An empty map means the network blocks discovery (client isolation, guest Wi-Fi).
      */
-    fun discover(ctx: Context, timeoutMs: Int = 6_000, onFound: (DlnaDevice) -> Unit): Int {
+    fun discover(ctx: Context, timeoutMs: Int = 6_000, onFound: (DlnaDevice) -> Unit): Map<String, String> {
         val wifi = ctx.applicationContext.getSystemService(WifiManager::class.java)
         // Some phones drop SSDP traffic unless a multicast lock is held
         val lock = wifi?.createMulticastLock("FreeCaster:ssdp")?.apply {
@@ -47,7 +45,8 @@ object Dlna {
             acquire()
         }
         val seen = HashSet<String>()
-        val responders = HashSet<String>()
+        val report = java.util.concurrent.ConcurrentHashMap<String, String>()
+        val pending = ArrayList<Thread>()
         try {
             openSocket(ctx).use { sock ->
                 sock.soTimeout = 500
@@ -81,22 +80,40 @@ object Dlna {
                     } catch (e: SocketTimeoutException) {
                         continue
                     }
-                    pkt.address?.hostAddress?.let { responders += it }
+                    val ip = pkt.address?.hostAddress ?: continue
                     val text = String(pkt.data, 0, pkt.length, Charsets.UTF_8)
-                    val location = text.lineSequence()
-                        .firstOrNull { it.startsWith("LOCATION:", ignoreCase = true) }
-                        ?.substringAfter(':')?.trim() ?: continue
+                    fun header(name: String) = text.lineSequence()
+                        .firstOrNull { it.startsWith("$name:", ignoreCase = true) }
+                        ?.substringAfter(':')?.trim()
+                    report.putIfAbsent(ip, header("SERVER") ?: "?")
+                    val location = header("LOCATION") ?: continue
                     if (!seen.add(location)) continue
                     // Fetching the description takes a moment; don't hold up listening for others
-                    Thread {
-                        runCatching { describe(location) }.getOrNull()?.let(onFound)
-                    }.apply { isDaemon = true }.start()
+                    pending += Thread {
+                        try {
+                            val d = describe(location)
+                            if (d.device != null) {
+                                report[ip] = d.summary
+                                onFound(d.device)
+                            } else if (report[ip]?.startsWith("✓") != true) {
+                                report[ip] = d.summary
+                            }
+                        } catch (e: Exception) {
+                            if (report[ip]?.startsWith("✓") != true) report[ip] = "${header("SERVER") ?: "?"}: ${e.message}"
+                        }
+                    }.apply {
+                        isDaemon = true
+                        start()
+                    }
                 }
             }
         } finally {
             lock?.release()
         }
-        return responders.size
+        // Let descriptions that are still loading finish, so the report is complete
+        val until = System.currentTimeMillis() + 3_000
+        for (t in pending) t.join((until - System.currentTimeMillis()).coerceAtLeast(1))
+        return HashMap(report)
     }
 
     /** Bound to the Wi-Fi address so the search never goes out over mobile data or a VPN. */
@@ -109,51 +126,43 @@ object Dlna {
         }
     }
 
-    /** Reads the device description and finds the control URLs. */
-    private fun describe(location: String): DlnaDevice? {
+    private class Description(val device: DlnaDevice?, val summary: String)
+
+    /**
+     * Reads the device description and finds the control URLs. Parsed with regexes rather than
+     * a strict XML parser: some TVs send a BOM, leading spaces or odd namespaces that break it.
+     */
+    private fun describe(location: String): Description {
         val body = StreamProxy.direct.newCall(Request.Builder().url(location).build()).execute().use {
-            if (!it.isSuccessful) return null
-            it.body?.string() ?: return null
+            if (!it.isSuccessful) throw IOException("description HTTP ${it.code}")
+            it.body?.string() ?: throw IOException("empty description")
         }
-        val p = Xml.newPullParser()
-        p.setInput(body.reader())
-        var name = ""
-        var manufacturer = ""
-        var model = ""
-        var base = location
-        var serviceType = ""
+        val name = tagText(body, "friendlyName").orEmpty()
+        val model = listOfNotNull(tagText(body, "manufacturer"), tagText(body, "modelName"))
+            .filter { it.isNotEmpty() }.joinToString(" ")
+        val base = tagText(body, "URLBase")?.takeIf { it.startsWith("http") } ?: location
         var avt: String? = null
         var rc: String? = null
-        var tag = ""
-        while (p.next() != XmlPullParser.END_DOCUMENT) {
-            when (p.eventType) {
-                XmlPullParser.START_TAG -> tag = p.name
-                XmlPullParser.TEXT -> {
-                    val t = p.text.trim()
-                    if (t.isEmpty()) continue
-                    when (tag) {
-                        "friendlyName" -> if (name.isEmpty()) name = t
-                        "manufacturer" -> if (manufacturer.isEmpty()) manufacturer = t
-                        "modelName" -> if (model.isEmpty()) model = t
-                        "URLBase" -> base = t
-                        "serviceType" -> serviceType = t
-                        "controlURL" -> when {
-                            serviceType.startsWith("urn:schemas-upnp-org:service:AVTransport") -> avt = t
-                            serviceType.startsWith("urn:schemas-upnp-org:service:RenderingControl") -> rc = t
-                        }
-                    }
-                }
-                XmlPullParser.END_TAG -> tag = ""
+        for (m in Regex("<(?:\\w+:)?service>(.*?)</(?:\\w+:)?service>", RegexOption.DOT_MATCHES_ALL).findAll(body)) {
+            val block = m.groupValues[1]
+            val type = tagText(block, "serviceType") ?: continue
+            val control = tagText(block, "controlURL") ?: continue
+            when {
+                type.contains(":service:AVTransport:") -> avt = control
+                type.contains(":service:RenderingControl:") -> rc = control
             }
         }
-        val control = avt ?: return null
-        return DlnaDevice(
-            name = name.ifEmpty { URL(location).host },
-            model = listOf(manufacturer, model).filter { it.isNotEmpty() }.joinToString(" "),
-            host = URL(location).host,
+        val label = listOf(name, model).filter { it.isNotEmpty() }.joinToString(" · ").ifEmpty { "?" }
+        val control = avt ?: return Description(null, "$label: no AVTransport (not a video renderer)")
+        val host = URL(location).host
+        val device = DlnaDevice(
+            name = name.ifEmpty { host },
+            model = model,
+            host = host,
             avTransport = URL(URL(base), control).toString(),
             rendering = rc?.let { URL(URL(base), it).toString() },
         )
+        return Description(device, "✓ $label")
     }
 
     // ---------------- Control ----------------

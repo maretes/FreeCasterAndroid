@@ -617,7 +617,7 @@ class MainActivity : AppCompatActivity() {
             refresh.visibility = View.GONE
             var found = 0
             thread {
-                val responders = runCatching {
+                val report = runCatching {
                     Dlna.discover(this) { d ->
                         runOnUiThread {
                             if (gen != searchGen || !sheet.isShowing) return@runOnUiThread
@@ -635,13 +635,14 @@ class MainActivity : AppCompatActivity() {
                             items.addView(item)
                         }
                     }
-                }.getOrDefault(0)
+                }.getOrDefault(emptyMap())
                 runOnUiThread {
                     if (gen != searchGen || !sheet.isShowing) return@runOnUiThread
                     // Nobody answering at all points at the network, not at the TV
                     if (found == 0) {
-                        hint.text = if (responders == 0) getString(R.string.dlna_blocked)
-                        else getString(R.string.dlna_none_n, responders)
+                        hint.text = if (report.isEmpty()) getString(R.string.dlna_blocked)
+                        else getString(R.string.dlna_none_n, report.size) + "\n\n" +
+                            report.entries.sortedBy { it.key }.joinToString("\n") { "• ${it.key} — ${it.value}" }
                     }
                     refresh.visibility = View.VISIBLE
                 }
