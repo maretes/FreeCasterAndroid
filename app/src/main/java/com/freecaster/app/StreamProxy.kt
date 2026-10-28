@@ -8,6 +8,10 @@ import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.ByteArrayInputStream
+import java.io.IOException
+import java.io.InputStream
+import java.net.InetSocketAddress
+import java.net.Proxy
 import java.net.URLEncoder
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -27,6 +31,20 @@ object StreamProxy {
         .followSslRedirects(true)
         .build()
     private val uriAttr = Regex("URI=\"([^\"]+)\"")
+    private val contentRange = Regex("bytes (\\d+)-(\\d+)/")
+    private const val MAX_RESUMES = 6
+    @Volatile private var tunneled: Pair<Int, OkHttpClient>? = null
+
+    /** Поки SSH-тунель увімкнено, усе йде лише через нього (kill switch). */
+    private fun client(): OkHttpClient {
+        val port = SshTunnel.socksPort ?: return http
+        tunneled?.let { (p, c) -> if (p == port) return c }
+        val c = http.newBuilder()
+            .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", port)))
+            .build()
+        tunneled = port to c
+        return c
+    }
 
     @Synchronized
     fun ensureStarted(): Int {
@@ -67,6 +85,56 @@ object StreamProxy {
         }
     }
 
+    private fun request(target: String, headers: Map<String, String>, range: String?): Request {
+        val req = Request.Builder().url(target)
+        headers.forEach { (k, v) -> req.header(k, v) }
+        range?.let { req.header("Range", it) }
+        return req.build()
+    }
+
+    /** Віддає байти [pos]..[end]; при помилці читання відкриває потік заново з [pos]. */
+    private class ResumingStream(
+        private var cur: InputStream?,
+        private var pos: Long,
+        private val end: Long,
+        private val reopen: (Long) -> InputStream,
+    ) : InputStream() {
+        private var failures = 0
+
+        override fun read(): Int {
+            val b = ByteArray(1)
+            return if (read(b, 0, 1) < 0) -1 else b[0].toInt() and 0xff
+        }
+
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            if (pos > end) return -1
+            while (true) {
+                try {
+                    val s = cur ?: reopen(pos).also { cur = it }
+                    val n = s.read(b, off, minOf(len.toLong(), end - pos + 1).toInt())
+                    if (n < 0) throw IOException("premature end of stream")
+                    pos += n
+                    failures = 0
+                    return n
+                } catch (e: IOException) {
+                    if (++failures > MAX_RESUMES) throw e
+                    cur?.let { runCatching { it.close() } }
+                    cur = null
+                    try {
+                        Thread.sleep(1_000L * failures)
+                    } catch (ie: InterruptedException) {
+                        throw e
+                    }
+                }
+            }
+        }
+
+        override fun close() {
+            cur?.let { runCatching { it.close() } }
+            cur = null
+        }
+    }
+
     private class Status(private val code: Int, private val text: String) : Response.IStatus {
         override fun getDescription() = "$code $text"
         override fun getRequestStatus() = code
@@ -79,12 +147,8 @@ object StreamProxy {
             val id = session.parameters["h"]?.firstOrNull() ?: ""
             val headers = headerSets[id] ?: emptyMap()
 
-            val req = Request.Builder().url(target)
-            headers.forEach { (k, v) -> req.header(k, v) }
-            session.headers["range"]?.let { req.header("Range", it) }
-
             val resp = try {
-                http.newCall(req.build()).execute()
+                client().newCall(request(target, headers, session.headers["range"])).execute()
             } catch (e: Exception) {
                 return cors(text(502, "upstream error: ${e.message}"))
             }
@@ -110,10 +174,37 @@ object StreamProxy {
 
             val mime = type.ifEmpty { "video/mp4" }
             val len = body.contentLength()
-            val r = if (len >= 0) newFixedLengthResponse(status, mime, body.byteStream(), len)
-            else newChunkedResponse(status, mime, body.byteStream())
+            val stream = resumable(resp, body.byteStream(), len, target, headers)
+            val r = if (len >= 0) newFixedLengthResponse(status, mime, stream, len)
+            else newChunkedResponse(status, mime, stream)
             listOf("Content-Range", "Accept-Ranges").forEach { h -> resp.header(h)?.let { r.addHeader(h, it) } }
             return cors(r)
+        }
+
+        /**
+         * Якщо з'єднання з сайтом обірвалось посеред відео (Wi-Fi, перепідключення
+         * SSH-тунелю), докачуємо з того самого байта через Range. Chromecast цього не помічає.
+         */
+        private fun resumable(
+            resp: okhttp3.Response, first: InputStream, len: Long,
+            target: String, headers: Map<String, String>,
+        ): InputStream {
+            if (len <= 0) return first
+            val start = if (resp.code == 206) {
+                val m = contentRange.find(resp.header("Content-Range") ?: "") ?: return first
+                m.groupValues[1].toLong()
+            } else if (resp.code == 200) 0L else return first
+            val end = start + len - 1
+            return ResumingStream(first, start, end) { from ->
+                val r = client().newCall(request(target, headers, "bytes=$from-$end")).execute()
+                val ok = r.code == 206 &&
+                    contentRange.find(r.header("Content-Range") ?: "")?.groupValues?.get(1)?.toLong() == from
+                if (!ok) {
+                    r.close()
+                    throw IOException("server does not resume (${r.code})")
+                }
+                r.body!!.byteStream()
+            }
         }
 
         private fun text(code: Int, msg: String): Response {

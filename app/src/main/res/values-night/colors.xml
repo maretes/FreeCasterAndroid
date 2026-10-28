@@ -1,0 +1,5 @@
+<resources>
+    <color name="tunnel_ok">#66BB6A</color>
+    <color name="tunnel_wait">#FFD54F</color>
+    <color name="tunnel_error">#EF5350</color>
+</resources>

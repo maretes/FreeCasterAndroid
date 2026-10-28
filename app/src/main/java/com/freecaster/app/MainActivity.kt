@@ -10,6 +10,7 @@ import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.KeyEvent
 import android.view.Menu
 import android.view.MenuItem
@@ -30,6 +31,7 @@ import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -42,13 +44,17 @@ import com.google.android.gms.cast.MediaMetadata
 import com.google.android.gms.cast.framework.CastButtonFactory
 import com.google.android.gms.cast.framework.CastContext
 import com.google.android.material.appbar.MaterialToolbar
+import com.google.android.material.color.MaterialColors
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
 import com.google.android.material.progressindicator.LinearProgressIndicator
+import com.google.android.material.textfield.TextInputEditText
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var web: WebView
+    private lateinit var toolbar: MaterialToolbar
+    private var tunnelItem: MenuItem? = null
     private lateinit var address: EditText
     private lateinit var fab: ExtendedFloatingActionButton
     private lateinit var progress: LinearProgressIndicator
@@ -63,6 +69,9 @@ class MainActivity : AppCompatActivity() {
 
     private val prefs by lazy { getSharedPreferences("main", MODE_PRIVATE) }
 
+    private val tunnelListener: (SshTunnel.Status) -> Unit = { updateTunnelIcon() }
+    private val tunnelRefresh = Runnable { updateTunnelIcon() }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -74,7 +83,7 @@ class MainActivity : AppCompatActivity() {
             WindowInsetsCompat.CONSUMED
         }
 
-        val toolbar = findViewById<MaterialToolbar>(R.id.toolbar)
+        toolbar = findViewById(R.id.toolbar)
         setSupportActionBar(toolbar)
         supportActionBar?.setDisplayShowTitleEnabled(false)
 
@@ -109,10 +118,28 @@ class MainActivity : AppCompatActivity() {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
 
-        if (!handleIntent(intent)) {
-            if (savedInstanceState != null) web.restoreState(savedInstanceState)
-            else web.loadUrl(prefs.getString("last", HOME) ?: HOME)
+        // Тунель був увімкнений: спершу проксі для WebView, потім перша сторінка (kill switch)
+        val firstLoad = {
+            if (!handleIntent(intent)) {
+                if (savedInstanceState != null) web.restoreState(savedInstanceState)
+                else web.loadUrl(prefs.getString("last", HOME) ?: HOME)
+            }
         }
+        if (SshSettings.wasEnabled(this) && !SshTunnel.isEnabled) {
+            if (!SshTunnel.start(this) { firstLoad() }) firstLoad()
+        } else firstLoad()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        SshTunnel.addListener(tunnelListener)
+        updateTunnelIcon()
+    }
+
+    override fun onStop() {
+        SshTunnel.removeListener(tunnelListener)
+        toolbar.removeCallbacks(tunnelRefresh)
+        super.onStop()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -327,6 +354,8 @@ class MainActivity : AppCompatActivity() {
     // ---------------- Chromecast ----------------
 
     private fun cast(v: DetectedVideo, viaPhone: Boolean) {
+        // Chromecast сам у тунель не потрапить, тож під тунелем відео йде лише через телефон
+        if (!viaPhone && SshTunnel.isEnabled) return cast(v, viaPhone = true)
         val session = castContext?.sessionManager?.currentCastSession
         val client = session?.remoteMediaClient
         if (session == null || !session.isConnected || client == null) {
@@ -387,6 +416,8 @@ class MainActivity : AppCompatActivity() {
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.main_menu, menu)
         CastButtonFactory.setUpMediaRouteButton(applicationContext, menu, R.id.media_route_menu_item)
+        tunnelItem = menu.findItem(R.id.action_tunnel)
+        updateTunnelIcon()
         return true
     }
 
@@ -403,6 +434,8 @@ class MainActivity : AppCompatActivity() {
             R.id.action_home -> web.loadUrl(HOME)
             R.id.action_remote -> startActivity(Intent(this, ExpandedControlsActivity::class.java))
             R.id.action_clear -> clearVideos()
+            R.id.action_tunnel -> onTunnelClick()
+            R.id.action_ssh_settings -> showSshSettings(connectAfter = false)
             R.id.action_adblock -> {
                 adBlock = !adBlock
                 item.isChecked = adBlock
@@ -412,6 +445,106 @@ class MainActivity : AppCompatActivity() {
             else -> return super.onOptionsItemSelected(item)
         }
         return true
+    }
+
+    // ---------------- SSH-тунель ----------------
+
+    private fun onTunnelClick() {
+        when {
+            SshSettings.load(this) == null -> showSshSettings(connectAfter = true)
+            !SshTunnel.isEnabled -> connectTunnel()
+            else -> showTunnelStatus()
+        }
+    }
+
+    private fun connectTunnel() {
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
+            toast("WebView на телефоні не підтримує проксі. Оновіть Android System WebView")
+            return
+        }
+        if (!SshTunnel.start(this) { web.reload() }) toast("Не вдалося запустити тунель")
+    }
+
+    private fun showTunnelStatus() {
+        val st = SshTunnel.status
+        val cfg = SshSettings.load(this)
+        val msg = SshTunnel.describe(st) + (cfg?.let { "\n\n${it.user}@${it.host}:${it.port}" } ?: "")
+        val b = MaterialAlertDialogBuilder(this)
+            .setTitle("SSH-тунель")
+            .setMessage(msg)
+            .setNegativeButton("Відключити") { _, _ -> SshTunnel.stop(this) { web.reload() } }
+            .setNeutralButton("Налаштування") { _, _ -> showSshSettings(connectAfter = false) }
+        if (st.state == SshTunnel.State.ERROR) {
+            b.setPositiveButton(if (st.hostKeyChanged) "Довіряти новому ключу" else "Повторити") { _, _ ->
+                if (st.hostKeyChanged) SshSettings.forgetHostKey(this)
+                SshTunnel.retry(this)
+            }
+        } else {
+            b.setPositiveButton("Закрити", null)
+        }
+        b.show()
+    }
+
+    private fun showSshSettings(connectAfter: Boolean) {
+        val view = layoutInflater.inflate(R.layout.dialog_ssh, null)
+        val host = view.findViewById<TextInputEditText>(R.id.ssh_host)
+        val port = view.findViewById<TextInputEditText>(R.id.ssh_port)
+        val user = view.findViewById<TextInputEditText>(R.id.ssh_user)
+        val pass = view.findViewById<TextInputEditText>(R.id.ssh_pass)
+        SshSettings.load(this)?.let {
+            host.setText(it.host)
+            port.setText(it.port.toString())
+            user.setText(it.user)
+            pass.setText(it.password)
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle("SSH-сервер")
+            .setView(view)
+            .setPositiveButton("Зберегти") { _, _ ->
+                val cfg = SshSettings.parse(
+                    host.text.toString(), port.text.toString(), user.text.toString(), pass.text.toString()
+                )
+                if (cfg == null) {
+                    toast("Вкажіть сервер, користувача і пароль")
+                    return@setPositiveButton
+                }
+                SshSettings.save(this, cfg)
+                when {
+                    SshTunnel.isEnabled -> SshTunnel.restart(this)
+                    connectAfter -> connectTunnel()
+                }
+            }
+            .setNegativeButton("Скасувати", null)
+            .show()
+    }
+
+    /**
+     * Сіра: вимкнено; зелена: працює (і перші 10 с тихого перепідключення);
+     * жовта: підключаємось; червона: помилка або сервер недоступний понад хвилину.
+     */
+    private fun updateTunnelIcon() {
+        val item = tunnelItem ?: return
+        val st = SshTunnel.status
+        val elapsed = SystemClock.elapsedRealtime() - st.since
+        val colorRes = when (st.state) {
+            SshTunnel.State.OFF -> null
+            SshTunnel.State.CONNECTED -> R.color.tunnel_ok
+            SshTunnel.State.RECONNECTING -> when {
+                elapsed < 10_000 -> R.color.tunnel_ok
+                elapsed < 60_000 -> R.color.tunnel_wait
+                else -> R.color.tunnel_error
+            }
+            SshTunnel.State.CONNECTING -> if (elapsed < 60_000) R.color.tunnel_wait else R.color.tunnel_error
+            SshTunnel.State.ERROR -> R.color.tunnel_error
+        }
+        val color = colorRes?.let { ContextCompat.getColor(this, it) }
+            ?: MaterialColors.getColor(toolbar, com.google.android.material.R.attr.colorOnSurfaceVariant)
+        item.icon = ContextCompat.getDrawable(this, R.drawable.ic_tunnel)?.mutate()?.apply { setTint(color) }
+
+        toolbar.removeCallbacks(tunnelRefresh)
+        if (st.state == SshTunnel.State.CONNECTING || st.state == SshTunnel.State.RECONNECTING) {
+            toolbar.postDelayed(tunnelRefresh, 2_000)
+        }
     }
 
     // ---------------- Повний екран у браузері ----------------
