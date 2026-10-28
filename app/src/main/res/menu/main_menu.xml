@@ -17,6 +17,8 @@
     <item android:id="@+id/action_reload" android:title="Оновити" app:showAsAction="never" />
     <item android:id="@+id/action_home" android:title="Головна (Google)" app:showAsAction="never" />
     <item android:id="@+id/action_remote" android:title="Пульт" app:showAsAction="never" />
+    <item android:id="@+id/action_audio_phone" android:title="🎧 Звук на телефоні" android:checkable="true" app:showAsAction="never" />
+    <item android:id="@+id/action_audio_delay" android:title="Затримка звуку…" app:showAsAction="never" />
     <item android:id="@+id/action_adblock" android:title="Блокувати рекламу" android:checkable="true" app:showAsAction="never" />
     <item android:id="@+id/action_ssh_settings" android:title="Налаштування SSH" app:showAsAction="never" />
     <item android:id="@+id/action_update" android:title="Перевірити оновлення" app:showAsAction="never" />

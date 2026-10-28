@@ -158,6 +158,9 @@ class MainActivity : AppCompatActivity() {
         super.onStop()
     }
 
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean =
+        AudioRelay.handleVolumeKey(this, event) || super.dispatchKeyEvent(event)
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleIntent(intent)
@@ -453,6 +456,7 @@ class MainActivity : AppCompatActivity() {
 
         client.load(request).setResultCallback { result ->
             if (result.status.isSuccess) {
+                AudioRelay.onCastStarted(this, v, viaPhone)
                 startActivity(Intent(this, ExpandedControlsActivity::class.java))
             } else if (!viaPhone) {
                 toast("Chromecast не зміг відкрити відео. Пробую через телефон…")
@@ -498,6 +502,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPrepareOptionsMenu(menu: Menu): Boolean {
         menu.findItem(R.id.action_adblock)?.isChecked = adBlock
+        menu.findItem(R.id.action_audio_phone)?.isChecked = AudioRelay.isActive
+        menu.findItem(R.id.action_audio_delay)?.isVisible = AudioRelay.isActive
         return super.onPrepareOptionsMenu(menu)
     }
 
@@ -511,6 +517,8 @@ class MainActivity : AppCompatActivity() {
             R.id.action_clear -> clearVideos()
             R.id.action_ssh_settings -> showSshSettings(connectAfter = false)
             R.id.action_update -> checkUpdates()
+            R.id.action_audio_phone -> AudioRelay.toggle(this)
+            R.id.action_audio_delay -> AudioRelay.showDelayDialog(this)
             R.id.action_adblock -> {
                 adBlock = !adBlock
                 item.isChecked = adBlock

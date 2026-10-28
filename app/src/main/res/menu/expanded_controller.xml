@@ -6,4 +6,6 @@
         android:title="Трансляція"
         app:actionProviderClass="androidx.mediarouter.app.MediaRouteActionProvider"
         app:showAsAction="always" />
+    <item android:id="@+id/action_audio_phone" android:title="🎧 Звук на телефоні" android:checkable="true" app:showAsAction="never" />
+    <item android:id="@+id/action_audio_delay" android:title="Затримка звуку…" app:showAsAction="never" />
 </menu>
