@@ -8,6 +8,7 @@ The app is in English by default; Ukrainian can be picked in menu → **Language
 - Finds videos on the page automatically (MP4, HLS `.m3u8`, DASH, WebM…), including inside nested frames
 - Shows the duration of each video and hides clips shorter than a minute (usually ads), with a button to show them anyway
 - **Cast via phone**: if a site refuses to serve the video to the TV, the phone relays it with the required headers (Referer, Cookie). A notification keeps it running with the screen off
+- **DLNA TVs** without Chromecast (Samsung, LG, Sony, Philips, Hisense, Kodi…): found automatically, with a remote
 - Remote: pause, seek, volume, plus a mini player and notification controls
 - **Phone audio**: video on the TV, sound on the phone's headphones / Bluetooth speaker
 - Built-in **SSH tunnel** (like `ssh -D`) or a **public proxy** from a list for the in-app browser, with a kill switch
@@ -38,6 +39,14 @@ The app is in English by default; Ukrainian can be picked in menu → **Language
 4. If the connection drops, the app silently reconnects in the background, and video on the Chromecast resumes from where it stopped.
 5. App updates always go directly, regardless of the tunnel.
 
+## TVs without Chromecast (DLNA)
+Most smart TVs accept video over DLNA, including Samsung, LG, Sony, Philips and Hisense, as well as Kodi.
+In the video's actions pick **Play on a TV (DLNA)**: the app finds TVs on the Wi-Fi network, sends the video and opens a remote
+(play/pause, ±30 s, seek bar, volume, stop). Reopen it from menu → **TV remote (DLNA)**.
+The TV always gets the video through the phone, so site headers, the tunnel and a proper Content-Type
+(plus the DLNA headers Samsung TVs require) are handled for it. MP4 works on practically every TV; HLS (`.m3u8`) only on some.
+Screen mirroring (Miracast / Smart View) can't be started by an app, and Pixel phones don't support Miracast at all.
+
 ## Public proxy instead of SSH
 Menu → **Connection settings** → **Public proxy from a list**. Pick a country (🇺🇦 UA by default) and a proxy.
 Candidates come from [proxyscrape.com](https://proxyscrape.com/free-proxy-list) and [spys.one](https://spys.one/en/free-proxy-list/)
@@ -67,7 +76,7 @@ Tap the toggle again to send the sound back to the Chromecast. Live streams are 
 ## Where to change things
 - Ad domain list: `AdBlocker.kt`
 - Video detection: `VideoDetector.kt`, duration probing: `VideoProbe.kt`
-- Proxy for the TV: `StreamProxy.kt`
+- Proxy for the TV: `StreamProxy.kt`, DLNA: `Dlna.kt`
 - SSH tunnel and public proxies: `SshTunnel.kt`, `SocksServer.kt`, `PublicProxies.kt`
 - Phone audio: `AudioRelay.kt`
 - Updates: `Updater.kt`

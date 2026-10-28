@@ -33,6 +33,9 @@ object StreamProxy {
     private val uriAttr = Regex("URI=\"([^\"]+)\"")
     private val contentRange = Regex("bytes (\\d+)-(\\d+)/")
     private const val MAX_RESUMES = 6
+
+    /** DLNA flags: byte seeking (Range) supported, streaming transfer. Samsung TVs require them. */
+    const val DLNA_FEATURES = "DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000"
     @Volatile private var tunneled: Pair<Int, OkHttpClient>? = null
 
     /** Always direct, bypassing the tunnel (used for app updates from GitHub). */
@@ -64,12 +67,16 @@ object StreamProxy {
         server = null
     }
 
-    /** Returns an address like http://192.168.x.x:port/p?... for the Chromecast. */
-    fun proxify(phoneIp: String, target: String, headers: Map<String, String>): String {
+    /**
+     * Returns an address like http://192.168.x.x:port/p?... for the Chromecast or a DLNA TV.
+     * [mime] replaces a missing or generic Content-Type from the site (TVs reject octet-stream).
+     */
+    fun proxify(phoneIp: String, target: String, headers: Map<String, String>, mime: String? = null): String {
         val port = ensureStarted()
         val id = Integer.toHexString(headers.hashCode())
         headerSets[id] = headers
-        return "http://$phoneIp:$port" + localPath(target, id)
+        return "http://$phoneIp:$port" + localPath(target, id) +
+            (mime?.let { "&m=" + URLEncoder.encode(it, "UTF-8") } ?: "")
     }
 
     private fun localPath(target: String, id: String) =
@@ -149,6 +156,7 @@ object StreamProxy {
             val target = session.parameters["u"]?.firstOrNull() ?: return cors(text(404, "no url"))
             val id = session.parameters["h"]?.firstOrNull() ?: ""
             val headers = headerSets[id] ?: emptyMap()
+            val forcedMime = session.parameters["m"]?.firstOrNull()
 
             val resp = try {
                 client().newCall(request(target, headers, session.headers["range"])).execute()
@@ -175,8 +183,16 @@ object StreamProxy {
                 return cors(newFixedLengthResponse(status, type.ifEmpty { "application/octet-stream" }, ByteArrayInputStream(bytes), bytes.size.toLong()))
             }
 
-            val mime = type.ifEmpty { "video/mp4" }
+            val generic = type.isEmpty() || type.startsWith("application/octet-stream") || type.startsWith("binary/")
+            val mime = if (generic) forcedMime ?: type.ifEmpty { "video/mp4" } else type
             val len = body.contentLength()
+            // TVs often ask with HEAD first: answer with the headers only
+            if (session.method == Method.HEAD) {
+                resp.close()
+                val r = newFixedLengthResponse(status, mime, ByteArrayInputStream(ByteArray(0)), len.coerceAtLeast(0))
+                listOf("Content-Range", "Accept-Ranges").forEach { h -> resp.header(h)?.let { r.addHeader(h, it) } }
+                return cors(r)
+            }
             val stream = resumable(resp, body.byteStream(), len, target, headers)
             val r = if (len >= 0) newFixedLengthResponse(status, mime, stream, len)
             else newChunkedResponse(status, mime, stream)
@@ -220,6 +236,8 @@ object StreamProxy {
             r.addHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
             r.addHeader("Access-Control-Allow-Headers", "*")
             r.addHeader("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges")
+            r.addHeader("contentFeatures.dlna.org", DLNA_FEATURES)
+            r.addHeader("transferMode.dlna.org", "Streaming")
             return r
         }
     }

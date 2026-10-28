@@ -17,6 +17,7 @@
     <item android:id="@+id/action_reload" android:title="@string/menu_reload" app:showAsAction="never" />
     <item android:id="@+id/action_home" android:title="@string/menu_home" app:showAsAction="never" />
     <item android:id="@+id/action_remote" android:title="@string/menu_remote" app:showAsAction="never" />
+    <item android:id="@+id/action_dlna_remote" android:title="@string/menu_dlna_remote" app:showAsAction="never" />
     <item android:id="@+id/action_audio_phone" android:title="@string/menu_audio_phone" android:checkable="true" app:showAsAction="never" />
     <item android:id="@+id/action_audio_delay" android:title="@string/menu_audio_delay" app:showAsAction="never" />
     <item android:id="@+id/action_adblock" android:title="@string/menu_adblock" android:checkable="true" app:showAsAction="never" />

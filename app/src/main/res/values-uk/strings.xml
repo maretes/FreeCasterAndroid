@@ -115,4 +115,14 @@
     <string name="proxy_uptime">аптайм %d%%</string>
     <string name="proxy_checking">Перевіряю %1$d проксі… працюють: %2$d</string>
     <string name="proxy_none_working">Жоден проксі не пройшов перевірку. Спробуйте іншу країну або оновіть за кілька хвилин</string>
+    <string name="action_dlna">На телевізор (DLNA: Samsung, LG, Sony…)</string>
+    <string name="dlna_title">Телевізори в мережі</string>
+    <string name="dlna_searching">Шукаю телевізори… Телевізор має бути увімкнений і в тій самій Wi-Fi</string>
+    <string name="dlna_none">Телевізорів не знайдено. Перевірте, що ТВ у тій самій Wi-Fi; на деяких ТВ треба увімкнути спільний доступ до медіа (DLNA) в налаштуваннях</string>
+    <string name="dlna_sending">Надсилаю на %s…</string>
+    <string name="dlna_failed">Телевізор не прийняв відео: %s</string>
+    <string name="dlna_hls_note">Не кожен телевізор відтворює HLS (.m3u8). Якщо не запускається, виберіть MP4-варіант відео</string>
+    <string name="menu_dlna_remote">Пульт телевізора (DLNA)</string>
+    <string name="volume_value">Гучність: %d</string>
+    <string name="stop_playback">Зупинити</string>
 </resources>

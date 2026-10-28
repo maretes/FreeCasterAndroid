@@ -61,6 +61,8 @@ import com.google.android.material.color.MaterialColors
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
 import com.google.android.material.progressindicator.LinearProgressIndicator
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.slider.Slider
 import com.google.android.material.textfield.TextInputEditText
 import kotlin.concurrent.thread
 
@@ -83,6 +85,10 @@ class MainActivity : AppCompatActivity() {
     private var pageGen = 0 // so probe results for an old page don't land on the new one
     @Volatile private var adBlock = true
     @Volatile private var userAgent = ""
+
+    /** The DLNA TV we last sent a video to, for the remote. */
+    private var dlnaDevice: DlnaDevice? = null
+    private var dlnaTitle = ""
 
     private var fullscreenView: View? = null
     private var fullscreenCallback: WebChromeClient.CustomViewCallback? = null
@@ -466,6 +472,7 @@ class MainActivity : AppCompatActivity() {
         }
         action(R.drawable.ic_cast, R.string.action_cast) { cast(v, viaPhone = false) }
         action(R.drawable.ic_phone, R.string.action_cast_phone) { cast(v, viaPhone = true) }
+        action(R.drawable.ic_tv, R.string.action_dlna) { showDlnaPicker(v) }
         action(R.drawable.ic_open, R.string.action_open) { openExternal(v) }
         action(R.drawable.ic_copy, R.string.action_copy) { copy(v.url) }
         sheet.setContentView(view)
@@ -556,6 +563,7 @@ class MainActivity : AppCompatActivity() {
         menu.findItem(R.id.action_adblock)?.isChecked = adBlock
         menu.findItem(R.id.action_audio_phone)?.isChecked = AudioRelay.isActive
         menu.findItem(R.id.action_audio_delay)?.isVisible = AudioRelay.isActive
+        menu.findItem(R.id.action_dlna_remote)?.isVisible = dlnaDevice != null
         return super.onPrepareOptionsMenu(menu)
     }
 
@@ -572,6 +580,7 @@ class MainActivity : AppCompatActivity() {
             R.id.action_audio_phone -> AudioRelay.toggle(this)
             R.id.action_audio_delay -> AudioRelay.showDelayDialog(this)
             R.id.action_language -> showLanguages()
+            R.id.action_dlna_remote -> showDlnaRemote()
             R.id.action_about -> showAbout()
             R.id.action_adblock -> {
                 adBlock = !adBlock
@@ -582,6 +591,196 @@ class MainActivity : AppCompatActivity() {
             else -> return super.onOptionsItemSelected(item)
         }
         return true
+    }
+
+    // ---------------- DLNA TVs ----------------
+
+    private fun showDlnaPicker(v: DetectedVideo) {
+        val sheet = BottomSheetDialog(this)
+        val view = layoutInflater.inflate(R.layout.sheet_videos, null)
+        view.findViewById<TextView>(R.id.sheet_title).setText(R.string.dlna_title)
+        val items = view.findViewById<LinearLayout>(R.id.video_items)
+        val refresh = view.findViewById<Button>(R.id.show_short)
+        val hint = TextView(this).apply {
+            setPadding(30, 8, 30, 24)
+            setTextColor(MaterialColors.getColor(this, com.google.android.material.R.attr.colorOnSurfaceVariant))
+        }
+        items.addView(hint)
+        var searchGen = 0
+
+        fun search() {
+            val gen = ++searchGen
+            items.removeAllViews()
+            items.addView(hint)
+            hint.visibility = View.VISIBLE
+            hint.setText(R.string.dlna_searching)
+            refresh.visibility = View.GONE
+            var found = 0
+            thread {
+                runCatching {
+                    Dlna.discover(this) { d ->
+                        runOnUiThread {
+                            if (gen != searchGen || !sheet.isShowing) return@runOnUiThread
+                            found++
+                            hint.visibility = View.GONE
+                            val item = layoutInflater.inflate(R.layout.item_video, items, false)
+                            item.findViewById<TextView>(R.id.video_kind).text = "DLNA"
+                            item.findViewById<TextView>(R.id.video_title).text = d.name
+                            item.findViewById<TextView>(R.id.video_host).text =
+                                listOf(d.model, d.host).filter { it.isNotEmpty() }.joinToString(" · ")
+                            item.setOnClickListener {
+                                sheet.dismiss()
+                                castDlna(v, d)
+                            }
+                            items.addView(item)
+                        }
+                    }
+                }
+                runOnUiThread {
+                    if (gen != searchGen || !sheet.isShowing) return@runOnUiThread
+                    if (found == 0) hint.setText(R.string.dlna_none)
+                    refresh.visibility = View.VISIBLE
+                }
+            }
+        }
+        refresh.setText(R.string.refresh)
+        refresh.setOnClickListener { search() }
+        sheet.setContentView(view)
+        sheet.show()
+        search()
+    }
+
+    /** DLNA TVs always get the video through the phone: headers, tunnel and a proper Content-Type. */
+    private fun castDlna(v: DetectedVideo, d: DlnaDevice) {
+        val ip = NetUtils.localIpv4(this) ?: run {
+            toast(getString(R.string.same_wifi))
+            return
+        }
+        val mime = when (v.kind) {
+            VideoKind.OTHER -> "video/mp4"
+            VideoKind.HLS -> "application/vnd.apple.mpegurl"
+            else -> v.kind.mime
+        }
+        val title = web.title ?: getString(R.string.kind_video)
+        toast(getString(R.string.dlna_sending, d.name))
+        if (v.kind == VideoKind.HLS) toast(getString(R.string.dlna_hls_note))
+        ProxyService.start(this)
+        val url = StreamProxy.proxify(ip, v.url, v.headers, mime)
+        thread {
+            val result = runCatching { Dlna.play(d, url, title, mime) }
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                result.onSuccess {
+                    dlnaDevice = d
+                    dlnaTitle = title
+                    invalidateOptionsMenu()
+                    showDlnaRemote()
+                }.onFailure {
+                    toast(getString(R.string.dlna_failed, it.message))
+                }
+            }
+        }
+    }
+
+    private fun showDlnaRemote() {
+        val d = dlnaDevice ?: return
+        val sheet = BottomSheetDialog(this)
+        val view = layoutInflater.inflate(R.layout.sheet_dlna_remote, null)
+        view.findViewById<TextView>(R.id.dlna_name).text = d.name
+        view.findViewById<TextView>(R.id.dlna_title).text = dlnaTitle
+        val seek = view.findViewById<Slider>(R.id.dlna_seek)
+        val time = view.findViewById<TextView>(R.id.dlna_time)
+        val play = view.findViewById<MaterialButton>(R.id.dlna_play)
+        val volumeText = view.findViewById<TextView>(R.id.dlna_volume)
+        view.findViewById<MaterialButton>(R.id.dlna_stop).setText(R.string.stop_playback)
+
+        var position = 0L
+        var duration = 0L
+        var playing = true
+        var volume: Int? = null
+        var dragging = false
+
+        // Every call goes over the network, so off the main thread; errors are just skipped
+        fun send(action: () -> Unit) = thread { runCatching(action) }
+
+        fun render() {
+            time.text = listOfNotNull(formatDuration(position.toDouble()), if (duration > 0) formatDuration(duration.toDouble()) else null)
+                .joinToString(" / ")
+            if (duration > 0 && !dragging) {
+                seek.valueTo = duration.toFloat()
+                seek.value = position.coerceIn(0, duration).toFloat()
+            }
+            play.setIconResource(if (playing) R.drawable.ic_pause else R.drawable.ic_play)
+            volumeText.text = volume?.let { getString(R.string.volume_value, it) } ?: ""
+        }
+
+        val poll = object : Runnable {
+            override fun run() {
+                if (!sheet.isShowing) return
+                thread {
+                    val pos = runCatching { Dlna.position(d) }.getOrNull()
+                    val st = runCatching { Dlna.state(d) }.getOrNull()
+                    val vol = runCatching { Dlna.volume(d) }.getOrNull()
+                    runOnUiThread {
+                        pos?.let { (p, dur) -> position = p; if (dur > 0) duration = dur }
+                        st?.let { playing = it == "PLAYING" || it == "TRANSITIONING" }
+                        vol?.let { volume = it }
+                        render()
+                    }
+                }
+                time.postDelayed(this, 1_000)
+            }
+        }
+
+        seek.addOnSliderTouchListener(object : Slider.OnSliderTouchListener {
+            override fun onStartTrackingTouch(slider: Slider) {
+                dragging = true
+            }
+
+            override fun onStopTrackingTouch(slider: Slider) {
+                dragging = false
+                position = slider.value.toLong()
+                send { Dlna.seek(d, position) }
+            }
+        })
+        play.setOnClickListener {
+            playing = !playing
+            render()
+            send { if (playing) Dlna.resume(d) else Dlna.pause(d) }
+        }
+        view.findViewById<Button>(R.id.dlna_back).setOnClickListener {
+            position = (position - 30).coerceAtLeast(0)
+            render()
+            send { Dlna.seek(d, position) }
+        }
+        view.findViewById<Button>(R.id.dlna_fwd).setOnClickListener {
+            position += 30
+            render()
+            send { Dlna.seek(d, position) }
+        }
+        view.findViewById<Button>(R.id.dlna_vol_down).setOnClickListener {
+            val v = ((volume ?: 10) - 2).coerceAtLeast(0)
+            volume = v
+            render()
+            send { Dlna.setVolume(d, v) }
+        }
+        view.findViewById<Button>(R.id.dlna_vol_up).setOnClickListener {
+            val v = ((volume ?: 10) + 2).coerceAtMost(100)
+            volume = v
+            render()
+            send { Dlna.setVolume(d, v) }
+        }
+        view.findViewById<Button>(R.id.dlna_stop).setOnClickListener {
+            send { Dlna.stop(d) }
+            dlnaDevice = null
+            invalidateOptionsMenu()
+            sheet.dismiss()
+        }
+        sheet.setOnDismissListener { time.removeCallbacks(poll) }
+        sheet.setContentView(view)
+        sheet.show()
+        render()
+        poll.run()
     }
 
     // ---------------- Updates ----------------
