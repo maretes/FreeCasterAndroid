@@ -39,9 +39,13 @@ The app is in English by default; Ukrainian can be picked in menu → **Language
 5. App updates always go directly, regardless of the tunnel.
 
 ## Public proxy instead of SSH
-Menu → **Connection settings** → **Public proxy from a list**. Pick a country (🇺🇦 UA by default) and a proxy;
-the list comes from [proxyscrape.com](https://proxyscrape.com/free-proxy-list) and shows protocol (HTTP / SOCKS4 / SOCKS5),
-city, ping, uptime and anonymity, fastest first. Only live proxies that can carry HTTPS are listed.
+Menu → **Connection settings** → **Public proxy from a list**. Pick a country (🇺🇦 UA by default) and a proxy.
+Candidates come from [proxyscrape.com](https://proxyscrape.com/free-proxy-list) and [spys.one](https://spys.one/en/free-proxy-list/)
+(its plain-text feeds `spys.me/proxy.txt` and `spys.me/socks.txt`). Most free proxies are useless, so they are filtered hard:
+- proxyscrape entries with uptime under 70% or a reported response time over 3 s are dropped right away;
+- every remaining candidate is checked on the phone **twice**, a moment apart: a real HTTPS request to `www.gstatic.com/generate_204`
+  through the proxy, with certificate and host name checks (a proxy that tampers with traffic fails);
+- only proxies that pass both checks with an average under 3 s are shown, with the latency measured on the phone, fastest first.
 Everything else works the same as with SSH: the key button, the kill switch, the traffic counter and casting via the phone.
 The app checks the proxy every 30 s and switches to the next one from the list if it stops responding.
 Public proxies are run by strangers: they can see which sites you open (HTTPS content stays encrypted), so don't sign in to important accounts through them.

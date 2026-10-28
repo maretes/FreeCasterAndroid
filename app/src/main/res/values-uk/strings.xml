@@ -101,7 +101,6 @@
     <string name="proxy_load_failed">Не вдалося завантажити список: %s</string>
     <string name="proxy_empty">Зараз немає робочих проксі для цієї країни</string>
     <string name="proxy_all">Усі</string>
-    <string name="proxy_meta">%1$s · %2$s · аптайм %3$d%%</string>
     <string name="proxy_ms">%d мс</string>
     <string name="anon_transparent">прозорий</string>
     <string name="anon_anonymous">анонімний</string>
@@ -113,4 +112,7 @@
     <string name="refresh">Оновити</string>
     <string name="change_proxy">Змінити проксі</string>
     <string name="proxy_selected">Проксі: %s</string>
+    <string name="proxy_uptime">аптайм %d%%</string>
+    <string name="proxy_checking">Перевіряю %1$d проксі… працюють: %2$d</string>
+    <string name="proxy_none_working">Жоден проксі не пройшов перевірку. Спробуйте іншу країну або оновіть за кілька хвилин</string>
 </resources>

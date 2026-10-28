@@ -808,8 +808,11 @@ class MainActivity : AppCompatActivity() {
                 item.findViewById<TextView>(R.id.video_title).text =
                     listOf(flag(p.country), p.city.ifEmpty { p.country }).filter { it.isNotEmpty() }.joinToString(" ")
                         .ifEmpty { p.ip }
-                item.findViewById<TextView>(R.id.video_host).text =
-                    getString(R.string.proxy_meta, p.address, anonymityLabel(p.anonymity), p.uptime)
+                item.findViewById<TextView>(R.id.video_host).text = listOfNotNull(
+                    p.address,
+                    anonymityLabel(p.anonymity).ifEmpty { null },
+                    if (p.uptime > 0) getString(R.string.proxy_uptime, p.uptime) else null,
+                ).joinToString(" · ")
                 item.findViewById<TextView>(R.id.video_duration).apply {
                     if (p.timeoutMs > 0) {
                         text = getString(R.string.proxy_ms, p.timeoutMs)
@@ -830,25 +833,50 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // Only proxies that pass a real check on the phone are shown, fastest first, as they come in
         fun load(country: String) {
             val gen = ++loadGen
+            val cancelled = { gen != loadGen || !sheet.isShowing }
             progress.visibility = View.VISIBLE
             message.visibility = View.GONE
             items.removeAllViews()
             thread {
-                val result = runCatching { PublicProxies.fetch(country) }
-                runOnUiThread {
-                    if (gen != loadGen || !sheet.isShowing) return@runOnUiThread
-                    progress.visibility = View.GONE
-                    result.onSuccess { list ->
-                        if (list.isEmpty()) {
-                            message.visibility = View.VISIBLE
-                            message.setText(R.string.proxy_empty)
-                        } else show(list)
-                    }.onFailure {
+                val candidates = runCatching { PublicProxies.candidates(country) }.getOrElse { e ->
+                    runOnUiThread {
+                        if (cancelled()) return@runOnUiThread
+                        progress.visibility = View.GONE
                         message.visibility = View.VISIBLE
-                        message.text = getString(R.string.proxy_load_failed, it.message)
+                        message.text = getString(R.string.proxy_load_failed, e.message)
                     }
+                    return@thread
+                }
+                val found = ArrayList<PublicProxy>()
+                fun status() {
+                    message.visibility = View.VISIBLE
+                    message.text = getString(R.string.proxy_checking, candidates.size, found.size)
+                }
+                runOnUiThread { if (!cancelled()) status() }
+                if (candidates.isEmpty()) {
+                    runOnUiThread {
+                        if (cancelled()) return@runOnUiThread
+                        progress.visibility = View.GONE
+                        message.setText(R.string.proxy_empty)
+                    }
+                    return@thread
+                }
+                PublicProxies.verify(candidates, cancelled) { p ->
+                    runOnUiThread {
+                        if (cancelled()) return@runOnUiThread
+                        found += p
+                        found.sortBy { it.timeoutMs }
+                        show(found)
+                        status()
+                    }
+                }
+                runOnUiThread {
+                    if (cancelled()) return@runOnUiThread
+                    progress.visibility = View.GONE
+                    if (found.isEmpty()) message.setText(R.string.proxy_none_working) else message.visibility = View.GONE
                 }
             }
         }
