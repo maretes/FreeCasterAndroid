@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+    <item
+        android:id="@+id/media_route_menu_item"
+        android:title="Трансляція"
+        app:actionProviderClass="androidx.mediarouter.app.MediaRouteActionProvider"
+        app:showAsAction="always" />
+    <item android:id="@+id/action_back" android:title="Назад" app:showAsAction="never" />
+    <item android:id="@+id/action_forward" android:title="Вперед" app:showAsAction="never" />
+    <item android:id="@+id/action_reload" android:title="Оновити" app:showAsAction="never" />
+    <item android:id="@+id/action_home" android:title="Головна (Google)" app:showAsAction="never" />
+    <item android:id="@+id/action_remote" android:title="Пульт" app:showAsAction="never" />
+    <item android:id="@+id/action_adblock" android:title="Блокувати рекламу" android:checkable="true" app:showAsAction="never" />
+    <item android:id="@+id/action_clear" android:title="Очистити знайдені відео" app:showAsAction="never" />
+</menu>

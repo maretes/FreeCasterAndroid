@@ -1,0 +1,6 @@
+<resources>
+    <style name="Theme.FreeCaster" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">#3D6AF2</item>
+        <item name="colorSecondary">#3D6AF2</item>
+    </style>
+</resources>

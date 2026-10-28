@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">FreeCaster</string>
+    <string name="address_hint">Пошук або адреса сайту</string>
+</resources>
