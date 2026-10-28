@@ -50,7 +50,12 @@ import androidx.webkit.WebViewFeature
 import com.google.android.gms.cast.MediaInfo
 import com.google.android.gms.cast.MediaLoadRequestData
 import com.google.android.gms.cast.MediaMetadata
+import com.google.android.gms.cast.MediaStatus
 import com.google.android.gms.cast.framework.CastButtonFactory
+import com.google.android.gms.cast.framework.CastSession
+import com.google.android.gms.cast.framework.SessionManagerListener
+import com.google.android.gms.cast.framework.media.RemoteMediaClient
+import androidx.mediarouter.app.MediaRouteButton
 import com.google.android.gms.cast.framework.CastContext
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.bottomsheet.BottomSheetDialog
@@ -85,6 +90,28 @@ class MainActivity : AppCompatActivity() {
     private var pageGen = 0 // so probe results for an old page don't land on the new one
     @Volatile private var adBlock = true
     @Volatile private var userAgent = ""
+
+    private var castButton: MediaRouteButton? = null
+
+    /** Video to cast as soon as the user picks a Chromecast in the device chooser. */
+    private var pendingCast: Pair<DetectedVideo, Boolean>? = null
+
+    private val sessionListener = object : SessionManagerListener<CastSession> {
+        private fun ready() {
+            val (v, viaPhone) = pendingCast ?: return
+            pendingCast = null
+            cast(v, viaPhone)
+        }
+        override fun onSessionStarted(session: CastSession, sessionId: String) = ready()
+        override fun onSessionResumed(session: CastSession, wasSuspended: Boolean) = ready()
+        override fun onSessionStartFailed(session: CastSession, error: Int) { pendingCast = null }
+        override fun onSessionStarting(session: CastSession) {}
+        override fun onSessionEnding(session: CastSession) {}
+        override fun onSessionEnded(session: CastSession, error: Int) {}
+        override fun onSessionResuming(session: CastSession, sessionId: String) {}
+        override fun onSessionResumeFailed(session: CastSession, error: Int) {}
+        override fun onSessionSuspended(session: CastSession, reason: Int) {}
+    }
 
     /** The DLNA TV we last sent a video to, for the remote. */
     private var dlnaDevice: DlnaDevice? = null
@@ -167,11 +194,13 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        castContext?.sessionManager?.addSessionManagerListener(sessionListener, CastSession::class.java)
         SshTunnel.addListener(tunnelListener)
         updateTunnelIcon()
     }
 
     override fun onStop() {
+        castContext?.sessionManager?.removeSessionManagerListener(sessionListener, CastSession::class.java)
         SshTunnel.removeListener(tunnelListener)
         toolbar.removeCallbacks(tunnelRefresh)
         super.onStop()
@@ -487,7 +516,14 @@ class MainActivity : AppCompatActivity() {
         val session = castContext?.sessionManager?.currentCastSession
         val client = session?.remoteMediaClient
         if (session == null || !session.isConnected || client == null) {
-            toast(getString(R.string.pick_chromecast))
+            // Not connected yet: open the device chooser and cast once a Chromecast is picked
+            val button = castButton
+            if (button != null && castContext != null) {
+                pendingCast = v to viaPhone
+                button.performClick()
+            } else {
+                toast(getString(R.string.pick_chromecast))
+            }
             return
         }
         val url = if (viaPhone) {
@@ -516,6 +552,7 @@ class MainActivity : AppCompatActivity() {
         client.load(request).setResultCallback { result ->
             if (result.status.isSuccess) {
                 AudioRelay.onCastStarted(this, v, viaPhone)
+                if (!viaPhone) watchDirectCast(client, v)
                 startActivity(Intent(this, ExpandedControlsActivity::class.java))
             } else if (!viaPhone) {
                 toast(getString(R.string.cast_retry_phone))
@@ -524,7 +561,35 @@ class MainActivity : AppCompatActivity() {
                 toast(getString(R.string.cast_failed, result.status.statusCode))
             }
         }
-        if (!viaPhone) ProxyService.stop(this)
+        // The proxy may still serve a DLNA TV or phone audio
+        if (!viaPhone && dlnaDevice == null && !AudioRelay.isActive) ProxyService.stop(this)
+    }
+
+    /**
+     * The Chromecast accepted the link but may fail a moment later, when the site refuses it
+     * without the browser's Referer/Cookie. Watch for that for 20 s and retry via the phone.
+     */
+    private fun watchDirectCast(client: RemoteMediaClient, v: DetectedVideo) {
+        var done = false
+        val callback = object : RemoteMediaClient.Callback() {
+            override fun onStatusUpdated() {
+                val st = client.mediaStatus ?: return
+                if (done || st.playerState != MediaStatus.PLAYER_STATE_IDLE ||
+                    st.idleReason != MediaStatus.IDLE_REASON_ERROR
+                ) return
+                done = true
+                client.unregisterCallback(this)
+                toast(getString(R.string.cast_retry_phone))
+                cast(v, viaPhone = true)
+            }
+        }
+        client.registerCallback(callback)
+        toolbar.postDelayed({
+            if (!done) {
+                done = true
+                client.unregisterCallback(callback)
+            }
+        }, 20_000)
     }
 
     private fun openExternal(v: DetectedVideo) {
@@ -545,6 +610,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.main_menu, menu)
         CastButtonFactory.setUpMediaRouteButton(applicationContext, menu, R.id.media_route_menu_item)
+        castButton = menu.findItem(R.id.media_route_menu_item)?.actionView as? MediaRouteButton
         menu.findItem(R.id.action_tunnel)?.actionView?.let { v ->
             tunnelIcon = v.findViewById(R.id.tunnel_icon)
             tunnelTraffic = v.findViewById(R.id.tunnel_traffic)
