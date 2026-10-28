@@ -128,4 +128,5 @@
     <string name="stop_playback">Stop</string>
     <string name="dlna_blocked">No device on this Wi-Fi answered at all. The router may be blocking device discovery (guest network or “client/AP isolation”), or the phone isn\'t on Wi-Fi.</string>
     <string name="dlna_none_n">%d devices on the network answered, but none of them is a TV that accepts video. Check that the TV is connected to this same Wi-Fi (Settings → Network on the TV). A TV showing a “Wireless Display” / screen mirroring screen is waiting for Miracast and usually isn\'t visible this way.</string>
+    <string name="quality_auto">Auto ≤%s</string>
 </resources>

@@ -332,7 +332,7 @@ class MainActivity : AppCompatActivity() {
 
     private inner class Bridge {
         @JavascriptInterface
-        fun onVideo(src: String, page: String, duration: Double) {
+        fun onVideo(src: String, page: String, duration: Double, height: Int) {
             if (!src.startsWith("http")) return
             val kind = VideoDetector.classify(src) ?: VideoKind.OTHER
             val headers = buildHeaders(src, mapOf("Referer" to page))
@@ -341,7 +341,7 @@ class MainActivity : AppCompatActivity() {
                 duration == -1.0 -> VideoProbe.LIVE
                 else -> null
             }
-            runOnUiThread { addVideo(DetectedVideo(src, kind, headers, d)) }
+            runOnUiThread { addVideo(DetectedVideo(src, kind, headers, d, height.takeIf { it > 0 })) }
         }
     }
 
@@ -388,23 +388,43 @@ class MainActivity : AppCompatActivity() {
         val merged = if (existing == null) v else existing.copy(
             kind = if (existing.kind == VideoKind.OTHER) v.kind else existing.kind,
             duration = v.duration ?: existing.duration,
+            height = existing.height ?: v.height,
         )
         if (merged == existing) return
         videos[v.url] = merged
         updateFab()
-        if (merged.duration == null && probed.add(v.url)) {
+        // The page often knows the duration but not the quality (or the other way round)
+        if ((merged.duration == null || merged.height == null) && probed.add(v.url)) {
             val gen = pageGen
-            VideoProbe.probe(merged) { d ->
-                if (d != null) runOnUiThread { if (gen == pageGen) setDuration(v.url, d) }
+            VideoProbe.probe(merged) { r ->
+                runOnUiThread { if (gen == pageGen) applyProbe(v.url, r) }
             }
         }
     }
 
-    private fun setDuration(url: String, d: Double) {
+    private fun applyProbe(url: String, r: VideoProbe.Result) {
         val v = videos[url] ?: return
-        if (v.duration != null) return
-        videos[url] = v.copy(duration = d)
+        val updated = v.copy(
+            duration = v.duration ?: r.duration,
+            // A master playlist's best quality beats what the page happens to be playing right now
+            height = if (r.adaptive) r.height ?: v.height else v.height ?: r.height,
+            adaptive = v.adaptive || r.adaptive,
+        )
+        if (updated == v) return
+        videos[url] = updated
         updateFab()
+    }
+
+    /** "1080p", "4K", "Auto ≤1080p"; from the probe, a probed master playlist, or a hint in the URL. */
+    private fun qualityLabel(v: DetectedVideo): String? {
+        val h = v.height ?: VideoProbe.knownHeight(v.url) ?: urlHeight.find(v.url)?.groupValues?.get(1)?.toIntOrNull()
+            ?: return null
+        val label = when {
+            h >= 2_000 -> "4K"
+            h >= 1_400 -> "1440p"
+            else -> "${h}p"
+        }
+        return if (v.adaptive) getString(R.string.quality_auto, label) else label
     }
 
     private fun clearVideos() {
@@ -440,7 +460,7 @@ class MainActivity : AppCompatActivity() {
             compareByDescending<DetectedVideo> { v ->
                 val d = v.duration ?: -2.0
                 if (d == VideoProbe.LIVE) Double.MAX_VALUE else d
-            }.thenBy { it.kind.ordinal }
+            }.thenByDescending { it.height ?: 0 }.thenBy { it.kind.ordinal }
         )
         val shortCount = all.count { it.isShort }
         val list = if (showShort) all else all.filter { !it.isShort }
@@ -455,7 +475,8 @@ class MainActivity : AppCompatActivity() {
             val u = Uri.parse(v.url)
             item.findViewById<TextView>(R.id.video_kind).text = kindLabel(v.kind)
             item.findViewById<TextView>(R.id.video_title).text = u.lastPathSegment ?: v.url
-            item.findViewById<TextView>(R.id.video_host).text = u.host ?: ""
+            item.findViewById<TextView>(R.id.video_host).text =
+                listOfNotNull(qualityLabel(v), u.host).joinToString(" · ")
             item.findViewById<TextView>(R.id.video_duration).apply {
                 text = formatDuration(v.duration) ?: ""
                 if (v.duration == VideoProbe.LIVE) setTextColor(ContextCompat.getColor(context, R.color.tunnel_error))
@@ -487,7 +508,7 @@ class MainActivity : AppCompatActivity() {
         val u = Uri.parse(v.url)
         view.findViewById<TextView>(R.id.action_title).text = u.lastPathSegment ?: v.url
         view.findViewById<TextView>(R.id.action_subtitle).text =
-            listOfNotNull(kindLabel(v.kind), formatDuration(v.duration), u.host).joinToString(" · ")
+            listOfNotNull(kindLabel(v.kind), qualityLabel(v), formatDuration(v.duration), u.host).joinToString(" · ")
         val items = view.findViewById<LinearLayout>(R.id.action_items)
         fun action(icon: Int, title: Int, run: () -> Unit) {
             val row = layoutInflater.inflate(R.layout.item_action, items, false) as TextView
@@ -1262,5 +1283,7 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val HOME = "https://www.google.com"
+        // "video_720p.mp4", "/1080/", "-480p-" — only with separators, so ids like 7201 don't match
+        private val urlHeight = Regex("[_\\-./=](2160|1440|1080|720|576|480|360|240)p?(?=[_\\-./?&]|$)", RegexOption.IGNORE_CASE)
     }
 }

@@ -1,28 +1,41 @@
 package com.freecaster.app
 
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
 /**
- * Finds a video's duration without downloading the file:
- * HLS: sum of #EXTINF, DASH: mediaPresentationDuration, MP4/MOV: the mvhd header.
+ * Finds a video's duration and quality without downloading the file:
+ * HLS: sum of #EXTINF and RESOLUTION from the master playlist, DASH: mediaPresentationDuration
+ * and Representation height, MP4/MOV: the mvhd and tkhd headers.
  * Requests use the same client as the proxy, i.e. through the SSH tunnel when it is on.
  */
 object VideoProbe {
     /** Live stream: no duration. */
     const val LIVE = -1.0
 
+    /** [height]: picture height in pixels; [adaptive]: HLS/DASH that switches quality on its own. */
+    data class Result(val duration: Double? = null, val height: Int? = null, val adaptive: Boolean = false)
+
     private val pool = Executors.newFixedThreadPool(3)
     private val extinf = Regex("#EXTINF:\\s*([\\d.]+)")
     private val mpdDuration = Regex("mediaPresentationDuration=\"([^\"]+)\"")
     private val isoDuration = Regex("P(?:(\\d+)D)?T?(?:(\\d+)H)?(?:(\\d+)M)?(?:([\\d.]+)S)?")
+    private val resolution = Regex("RESOLUTION=(\\d+)x(\\d+)")
+    private val mpdHeight = Regex("\\sheight=\"(\\d+)\"")
 
-    /** [done] is called on a background thread; null if the duration is unknown. */
-    fun probe(v: DetectedVideo, done: (Double?) -> Unit) {
+    /** Heights of HLS variants seen in master playlists, so each variant can be labeled too. */
+    private val variantHeights = ConcurrentHashMap<String, Int>()
+
+    /** Height of an HLS variant if its master playlist was already probed. */
+    fun knownHeight(url: String): Int? = variantHeights[url]
+
+    /** [done] is called on a background thread. */
+    fun probe(v: DetectedVideo, done: (Result) -> Unit) {
         pool.execute {
-            val d = try {
+            val r = try {
                 when (v.kind) {
-                    VideoKind.HLS -> hls(v.url, v.headers, depth = 0)
+                    VideoKind.HLS -> hls(v.url, v.headers)
                     VideoKind.DASH -> dash(v.url, v.headers)
                     VideoKind.MP4, VideoKind.MOV, VideoKind.OTHER -> mp4(v.url, v.headers)
                     else -> null
@@ -30,7 +43,7 @@ object VideoProbe {
             } catch (e: Exception) {
                 null
             }
-            done(d)
+            done(r ?: Result())
         }
     }
 
@@ -43,34 +56,56 @@ object VideoProbe {
         }
     }
 
-    private fun hls(url: String, headers: Map<String, String>, depth: Int): Double? {
+    private fun hls(url: String, headers: Map<String, String>): Result? {
         val txt = text(url, headers) ?: return null
         if (!txt.trimStart().startsWith("#EXTM3U")) return null
-        if (txt.contains("#EXT-X-STREAM-INF")) {
-            // Master playlist: all variants have the same duration, take the first one
-            if (depth > 0) return null
-            val variant = txt.lineSequence().map { it.trim() }
-                .dropWhile { !it.startsWith("#EXT-X-STREAM-INF") }.drop(1)
-                .firstOrNull { it.isNotEmpty() && !it.startsWith("#") } ?: return null
-            val abs = url.toHttpUrlOrNull()?.resolve(variant)?.toString() ?: return null
-            return hls(abs, headers, depth + 1)
+        if (!txt.contains("#EXT-X-STREAM-INF")) {
+            return Result(mediaDuration(txt), variantHeights[url], adaptive = false)
         }
+        // Master playlist: remember every variant's height; all variants have the same duration
+        var first: String? = null
+        var maxHeight = 0
+        var pending: Int? = null
+        for (raw in txt.lineSequence()) {
+            val line = raw.trim()
+            when {
+                line.startsWith("#EXT-X-STREAM-INF") ->
+                    pending = resolution.find(line)?.groupValues?.get(2)?.toIntOrNull() ?: 0
+                line.isNotEmpty() && !line.startsWith("#") && pending != null -> {
+                    val abs = url.toHttpUrlOrNull()?.resolve(line)?.toString()
+                    if (abs != null) {
+                        if (first == null) first = abs
+                        if (pending > 0) variantHeights[abs] = pending
+                    }
+                    maxHeight = maxOf(maxHeight, pending)
+                    pending = null
+                }
+            }
+        }
+        val duration = first?.let { text(it, headers) }?.let { mediaDuration(it) }
+        return Result(duration, maxHeight.takeIf { it > 0 }, adaptive = true)
+    }
+
+    private fun mediaDuration(txt: String): Double? {
         if (!txt.contains("#EXT-X-ENDLIST") && !txt.contains("#EXT-X-PLAYLIST-TYPE:VOD")) return LIVE
         return extinf.findAll(txt).sumOf { it.groupValues[1].toDoubleOrNull() ?: 0.0 }.takeIf { it > 0 }
     }
 
-    private fun dash(url: String, headers: Map<String, String>): Double? {
+    private fun dash(url: String, headers: Map<String, String>): Result? {
         val txt = text(url, headers) ?: return null
-        if (txt.contains("type=\"dynamic\"")) return LIVE
-        val iso = mpdDuration.find(txt)?.groupValues?.get(1) ?: return null
-        val m = isoDuration.matchEntire(iso) ?: return null
-        val (d, h, min, s) = m.destructured
-        return (d.toDoubleOrNull() ?: 0.0) * 86400 + (h.toDoubleOrNull() ?: 0.0) * 3600 +
-            (min.toDoubleOrNull() ?: 0.0) * 60 + (s.toDoubleOrNull() ?: 0.0)
+        val height = mpdHeight.findAll(txt).mapNotNull { it.groupValues[1].toIntOrNull() }.maxOrNull()
+        if (txt.contains("type=\"dynamic\"")) return Result(LIVE, height, adaptive = true)
+        val duration = mpdDuration.find(txt)?.groupValues?.get(1)?.let { iso ->
+            isoDuration.matchEntire(iso)?.destructured?.let { (d, h, min, s) ->
+                (d.toDoubleOrNull() ?: 0.0) * 86400 + (h.toDoubleOrNull() ?: 0.0) * 3600 +
+                    (min.toDoubleOrNull() ?: 0.0) * 60 + (s.toDoubleOrNull() ?: 0.0)
+            }
+        }
+        return Result(duration, height, adaptive = true)
     }
 
-    /** Walk the top-level boxes (ftyp, mdat, moov…) and read mvhd inside moov. */
-    private fun mp4(url: String, headers: Map<String, String>): Double? {
+    /** Walk the top-level boxes (ftyp, mdat, moov…) and read mvhd and tkhd inside moov. */
+    private fun mp4(url: String, headers: Map<String, String>): Result? {
         var offset = 0L
         repeat(10) { i ->
             val head = range(url, headers, offset, 16) ?: return null
@@ -85,8 +120,9 @@ object VideoProbe {
                 hdr = 16
             }
             if (type == "moov") {
-                val moov = range(url, headers, offset + hdr, 512) ?: return null
-                return mvhd(moov)
+                // Enough for mvhd and the track headers, which come first in moov
+                val moov = range(url, headers, offset + hdr, minOf(size - hdr, 16_384L).toInt()) ?: return null
+                return Result(mvhd(moov), tkhdHeight(moov))
             }
             if (size < 8) return null // 0 = until end of file, so no moov after it
             offset += size
@@ -115,6 +151,30 @@ object VideoProbe {
             p += size
         }
         return null
+    }
+
+    /**
+     * Height of the video track: the largest height among the tkhd boxes (audio tracks have 0).
+     * Searched by name because tkhd sits inside trak boxes; height is 16.16 fixed point.
+     */
+    private fun tkhdHeight(b: ByteArray): Int? {
+        var best = 0
+        var i = 4
+        while (i + 4 <= b.size) {
+            if (b[i] == 't'.code.toByte() && b[i + 1] == 'k'.code.toByte() &&
+                b[i + 2] == 'h'.code.toByte() && b[i + 3] == 'd'.code.toByte()
+            ) {
+                val payload = i + 4
+                val v1 = b[payload].toInt() == 1
+                val hOff = payload + if (v1) 92 else 80
+                if (hOff + 4 <= b.size) {
+                    val h = (u32(b, hOff) shr 16).toInt()
+                    if (h in 1..8_640) best = maxOf(best, h)
+                }
+            }
+            i++
+        }
+        return best.takeIf { it > 0 }
     }
 
     /** Bytes [from]..[from+len); null if the server ignores Range beyond the start of the file. */

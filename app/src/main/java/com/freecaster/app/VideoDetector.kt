@@ -20,6 +20,10 @@ data class DetectedVideo(
     val headers: Map<String, String>,
     /** Seconds; [VideoProbe.LIVE] for live streams; null while unknown. */
     val duration: Double? = null,
+    /** Picture height in pixels (1080 for 1080p), null while unknown. */
+    val height: Int? = null,
+    /** HLS master / DASH: the player picks the quality itself, [height] is the best one. */
+    val adaptive: Boolean = false,
 ) {
     /** Shorter than a minute: most likely an ad or a promo. */
     val isShort: Boolean get() = duration != null && duration >= 0 && duration < 60
@@ -50,8 +54,8 @@ object VideoDetector {
     const val SCAN_JS = """
 (function(){
   if (window.__freeCaster) return; window.__freeCaster = 1;
-  function report(s, d){
-    if (s && s.indexOf('http') === 0) { try { CasterBridge.onVideo(s, location.href, d); } catch(e){} }
+  function report(s, d, h){
+    if (s && s.indexOf('http') === 0) { try { CasterBridge.onVideo(s, location.href, d, h || 0); } catch(e){} }
   }
   // Duration: seconds, -1 live stream, -2 not known yet
   function dur(v){
@@ -63,8 +67,9 @@ object VideoDetector {
     try {
       document.querySelectorAll('video, audio').forEach(function(v){
         var d = dur(v);
-        report(v.currentSrc || v.src, d);
-        v.querySelectorAll('source').forEach(function(s){ report(s.src, d); });
+        var h = v.videoHeight || 0; // height of what is actually playing
+        report(v.currentSrc || v.src, d, h);
+        v.querySelectorAll('source').forEach(function(s){ report(s.src, d, 0); });
       });
     } catch(e){}
   }
