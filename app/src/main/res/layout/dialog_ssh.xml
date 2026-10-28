@@ -10,7 +10,7 @@
     <com.google.android.material.textfield.TextInputLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:hint="Сервер (host або user@host)">
+        android:hint="@string/ssh_host_hint">
 
         <com.google.android.material.textfield.TextInputEditText
             android:id="@+id/ssh_host"
@@ -25,7 +25,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
-        android:hint="Порт">
+        android:hint="@string/ssh_port_hint">
 
         <com.google.android.material.textfield.TextInputEditText
             android:id="@+id/ssh_port"
@@ -40,7 +40,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
-        android:hint="Користувач">
+        android:hint="@string/ssh_user_hint">
 
         <com.google.android.material.textfield.TextInputEditText
             android:id="@+id/ssh_user"
@@ -55,7 +55,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
-        android:hint="Пароль"
+        android:hint="@string/ssh_pass_hint"
         app:endIconMode="password_toggle">
 
         <com.google.android.material.textfield.TextInputEditText

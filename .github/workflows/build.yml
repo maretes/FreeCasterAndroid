@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write # щоб створювати релізи для автооновлення
+  contents: write # to publish releases for in-app updates
 
 jobs:
   build:
@@ -25,7 +25,7 @@ jobs:
             echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.p12"
             echo "KEYSTORE_PATH=$RUNNER_TEMP/release.p12" >> "$GITHUB_ENV"
           else
-            echo "::warning::Немає секрету KEYSTORE_BASE64: APK підписано тимчасовим ключем, реліз для автооновлення не створюється"
+            echo "::warning::No KEYSTORE_BASE64 secret: the APK is signed with a throwaway key and no release is published"
           fi
       - name: Build
         env:

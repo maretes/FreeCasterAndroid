@@ -13,7 +13,7 @@ import javax.crypto.spec.GCMParameterSpec
 
 data class SshConfig(val host: String, val port: Int, val user: String, val password: String)
 
-/** Дані SSH-сервера. Пароль шифрується ключем з Android Keystore. */
+/** SSH server settings. The password is encrypted with an Android Keystore key. */
 object SshSettings {
     private const val PREFS = "ssh"
     private const val KEY_ALIAS = "freecaster_ssh"
@@ -32,7 +32,7 @@ object SshSettings {
 
     fun save(ctx: Context, cfg: SshConfig) {
         val old = load(ctx)
-        // Інший сервер: забуваємо ключ попереднього
+        // Different server: forget the previous host key
         if (old == null || old.host != cfg.host || old.port != cfg.port) forgetHostKey(ctx)
         prefs(ctx).edit()
             .putString("host", cfg.host)
@@ -46,18 +46,18 @@ object SshSettings {
         knownHosts(ctx).delete()
     }
 
-    /** Чи був тунель увімкнений (щоб після перезапуску процесу kill switch не вимкнувся). */
+    /** Whether the tunnel was on (so the kill switch survives a process restart). */
     fun wasEnabled(ctx: Context) = prefs(ctx).getBoolean("enabled", false)
 
-    // commit(), а не apply(): прапорець має бути на диску ще до того, як щось піде не так,
-    // інакше після перезапуску тунель увімкнеться сам
+    // commit(), not apply(): the flag must hit the disk before anything can go wrong,
+    // otherwise the tunnel turns itself back on after a restart
     fun setEnabled(ctx: Context, on: Boolean) {
         prefs(ctx).edit().putBoolean("enabled", on).commit()
     }
 
     /**
-     * Приймає і просто "host", і "user@host:port", і цілу команду
-     * на кшталт "ssh -D 1080 -N -C user@host -p 2222".
+     * Accepts a plain "host", "user@host:port", or a whole command
+     * like "ssh -D 1080 -N -C user@host -p 2222".
      */
     fun parse(hostIn: String, portIn: String, userIn: String, pass: String): SshConfig? {
         var host = hostIn.trim()
@@ -100,7 +100,7 @@ object SshSettings {
         return Base64.encodeToString(c.iv + c.doFinal(text.toByteArray()), Base64.NO_WRAP)
     }
 
-    // null, якщо ключ зник (наприклад, після відновлення з бекапу)
+    // null if the key is gone (e.g. after restoring from a backup)
     private fun decrypt(data: String): String? = runCatching {
         val b = Base64.decode(data, Base64.NO_WRAP)
         val c = Cipher.getInstance("AES/GCM/NoPadding")

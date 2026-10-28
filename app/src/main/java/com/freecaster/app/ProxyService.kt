@@ -15,7 +15,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 
-/** Тримає проксі живим, коли екран вимкнено (сповіщення "Трансляція через телефон"). */
+/** Keeps the proxy alive with the screen off ("Casting via phone" notification). */
 class ProxyService : Service() {
     private var wifiLock: WifiManager.WifiLock? = null
     private var wakeLock: PowerManager.WakeLock? = null
@@ -29,7 +29,7 @@ class ProxyService : Service() {
         }
         val nm = getSystemService(NotificationManager::class.java)
         nm?.createNotificationChannel(
-            NotificationChannel(CHANNEL, "Трансляція через телефон", NotificationManager.IMPORTANCE_LOW)
+            NotificationChannel(CHANNEL, getString(R.string.notif_proxy_title), NotificationManager.IMPORTANCE_LOW)
         )
         val open = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
@@ -39,11 +39,11 @@ class ProxyService : Service() {
         )
         val notification = NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_cast)
-            .setContentTitle("Трансляція через телефон")
-            .setContentText("Телефон передає відео на Chromecast")
+            .setContentTitle(getString(R.string.notif_proxy_title))
+            .setContentText(getString(R.string.notif_proxy_text))
             .setOngoing(true)
             .setContentIntent(open)
-            .addAction(0, "Зупинити", stop)
+            .addAction(0, getString(R.string.stop), stop)
             .build()
         val type = if (Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK else 0
         ServiceCompat.startForeground(this, 1, notification, type)

@@ -6,7 +6,7 @@ import android.view.MenuItem
 import com.google.android.gms.cast.framework.CastButtonFactory
 import com.google.android.gms.cast.framework.media.widget.ExpandedControllerActivity
 
-/** Повноекранний пульт: пауза, перемотування, гучність (готовий екран з Cast SDK). */
+/** Full-screen remote: pause, seek, volume (stock screen from the Cast SDK). */
 class ExpandedControlsActivity : ExpandedControllerActivity() {
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         super.onCreateOptionsMenu(menu)

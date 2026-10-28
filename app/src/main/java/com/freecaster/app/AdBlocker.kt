@@ -3,13 +3,13 @@ package com.freecaster.app
 import android.webkit.WebResourceResponse
 import java.io.ByteArrayInputStream
 
-/** Простий блокувальник реклами за доменами. Додавайте свої домени в список. */
+/** Simple domain-based ad blocker. Add your own domains to the list. */
 object AdBlocker {
     private val hosts = hashSetOf(
         // Google ads
         "doubleclick.net", "googlesyndication.com", "googleadservices.com", "adservice.google.com",
         "pagead2.googlesyndication.com", "imasdk.googleapis.com", "googletagservices.com",
-        // Попапи та агресивні мережі
+        // Pop-ups and aggressive networks
         "popads.net", "popcash.net", "propellerads.com", "propellerclick.com", "onclickads.net",
         "onclkds.com", "adsterra.com", "adsterratech.com", "exoclick.com", "exosrv.com",
         "juicyads.com", "trafficjunky.net", "trafficjunky.com", "trafficstars.com", "tsyndicate.com",
@@ -18,12 +18,12 @@ object AdBlocker {
         "realsrv.com", "mgid.com", "taboola.com", "outbrain.com", "revcontent.com",
         "zeropark.com", "popmyads.com", "galaksion.com", "bidgear.com", "adspyglass.com",
         "rollerads.com", "evadav.com", "pushground.com", "dolohen.com", "acint.net",
-        // Великі рекламні біржі
+        // Large ad exchanges
         "adnxs.com", "rubiconproject.com", "pubmatic.com", "openx.net", "criteo.com",
         "criteo.net", "casalemedia.com", "smartadserver.com", "advertising.com", "adform.net",
         "yieldmo.com", "33across.com", "sharethrough.com", "media.net", "amazon-adsystem.com",
         "moatads.com", "adsafeprotected.com", "serving-sys.com", "adroll.com", "zedo.com",
-        // Трекери
+        // Trackers
         "scorecardresearch.com", "quantserve.com", "hotjar.com", "mc.yandex.ru", "an.yandex.ru",
         "adfox.ru", "yandexadexchange.net",
     )

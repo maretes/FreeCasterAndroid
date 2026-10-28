@@ -14,8 +14,8 @@ import org.json.JSONObject
 import java.io.IOException
 
 /**
- * Оновлення з GitHub Releases: кожна збірка в main публікується як реліз "build-N",
- * а N збігається з versionCode. Завжди напряму, незалежно від SSH-тунелю.
+ * Updates from GitHub Releases: every build on main is published as release "build-N",
+ * where N equals versionCode. Always direct, regardless of the SSH tunnel.
  */
 object Updater {
     private const val LATEST = "https://api.github.com/repos/maretes/FreeCasterAndroid/releases/latest"
@@ -25,28 +25,28 @@ object Updater {
     fun currentBuild(ctx: Context): Long =
         PackageInfoCompat.getLongVersionCode(ctx.packageManager.getPackageInfo(ctx.packageName, 0))
 
-    /** Блокуючий виклик, не з головного потоку. */
+    /** Blocking call, not on the main thread. */
     fun fetchLatest(): Release {
         val req = Request.Builder().url(LATEST).header("Accept", "application/vnd.github+json").build()
         val json = StreamProxy.direct.newCall(req).execute().use { r ->
             if (!r.isSuccessful) throw IOException("GitHub: HTTP ${r.code}")
-            JSONObject(r.body?.string() ?: throw IOException("порожня відповідь"))
+            JSONObject(r.body?.string() ?: throw IOException("empty response"))
         }
         val build = json.optString("tag_name").removePrefix("build-").toLongOrNull()
-            ?: throw IOException("невідомий реліз ${json.optString("tag_name")}")
-        val assets = json.optJSONArray("assets") ?: throw IOException("у релізі немає APK")
+            ?: throw IOException("unknown release ${json.optString("tag_name")}")
+        val assets = json.optJSONArray("assets") ?: throw IOException("no APK in the release")
         for (i in 0 until assets.length()) {
             val a = assets.getJSONObject(i)
             if (a.optString("name").endsWith(".apk")) {
                 return Release(build, a.getString("browser_download_url"), a.optLong("size"), json.optString("body").trim())
             }
         }
-        throw IOException("у релізі немає APK")
+        throw IOException("no APK in the release")
     }
 
     /**
-     * Качає APK одразу в сесію PackageInstaller (без тимчасового файлу) і запускає встановлення.
-     * Система покаже одне підтвердження, далі додаток перезапуститься новою версією.
+     * Streams the APK straight into a PackageInstaller session (no temp file) and starts the install.
+     * The system shows one confirmation, then the app restarts as the new version.
      */
     fun install(ctx: Context, rel: Release, progress: (Int) -> Unit) {
         val installer = ctx.packageManager.packageInstaller
@@ -61,7 +61,7 @@ object Updater {
                 val req = Request.Builder().url(rel.apkUrl).build()
                 StreamProxy.direct.newCall(req).execute().use { r ->
                     if (!r.isSuccessful) throw IOException("HTTP ${r.code}")
-                    val body = r.body ?: throw IOException("порожня відповідь")
+                    val body = r.body ?: throw IOException("empty response")
                     val total = body.contentLength().takeIf { it > 0 } ?: rel.size
                     session.openWrite("base.apk", 0, if (total > 0) total else -1).use { out ->
                         body.byteStream().use { input ->
@@ -95,7 +95,7 @@ object Updater {
     }
 }
 
-/** Результат встановлення від PackageInstaller. */
+/** Install result from PackageInstaller. */
 class UpdateReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)) {
@@ -103,17 +103,14 @@ class UpdateReceiver : BroadcastReceiver() {
                 val confirm = IntentCompat.getParcelableExtra(intent, Intent.EXTRA_INTENT, Intent::class.java) ?: return
                 context.startActivity(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             }
-            PackageInstaller.STATUS_SUCCESS -> Unit // додаток уже перезапускається
+            PackageInstaller.STATUS_SUCCESS -> Unit // the app is already restarting
             PackageInstaller.STATUS_FAILURE_CONFLICT, PackageInstaller.STATUS_FAILURE_INCOMPATIBLE ->
-                Toast.makeText(
-                    context,
-                    "Оновлення підписане іншим ключем. Один раз видаліть FreeCaster і встановіть APK вручну",
-                    Toast.LENGTH_LONG,
-                ).show()
-            PackageInstaller.STATUS_FAILURE_ABORTED -> Unit // користувач натиснув "Скасувати"
+                Toast.makeText(context, context.getString(R.string.update_wrong_key), Toast.LENGTH_LONG).show()
+            PackageInstaller.STATUS_FAILURE_ABORTED -> Unit // the user tapped "Cancel"
             else -> {
-                val msg = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: "невідома помилка"
-                Toast.makeText(context, "Оновлення не встановилось: $msg", Toast.LENGTH_LONG).show()
+                val msg = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
+                    ?: context.getString(R.string.unknown_error)
+                Toast.makeText(context, context.getString(R.string.update_not_installed, msg), Toast.LENGTH_LONG).show()
             }
         }
     }

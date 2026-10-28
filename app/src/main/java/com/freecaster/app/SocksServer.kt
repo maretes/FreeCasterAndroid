@@ -13,18 +13,18 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 
-/** З'єднання з цільовим сайтом (у нас це канал усередині SSH). */
+/** Connection to the target site (here: a channel inside SSH). */
 class Upstream(val input: InputStream, val output: OutputStream, private val onClose: () -> Unit) : Closeable {
     override fun close() = onClose()
 }
 
 /**
- * Локальний SOCKS-сервер на 127.0.0.1 (SOCKS5, а також SOCKS4/4a).
- * Кожне з'єднання передається в [open], тобто як у `ssh -D`.
+ * Local SOCKS server on 127.0.0.1 (SOCKS5, plus SOCKS4/4a).
+ * Every connection is handed to [open], just like `ssh -D`.
  */
 class SocksServer(
     private val open: (host: String, port: Int) -> Upstream,
-    private val traffic: AtomicLong, // байти в обидва боки
+    private val traffic: AtomicLong, // bytes in both directions
 ) {
     private val server = ServerSocket(0, 64, InetAddress.getByName("127.0.0.1"))
     private val pool = Executors.newCachedThreadPool()
@@ -58,7 +58,7 @@ class SocksServer(
     private fun handle(client: Socket) = client.use {
         try {
             client.tcpNoDelay = true
-            client.soTimeout = 30_000 // лише на час рукостискання
+            client.soTimeout = 30_000 // only during the handshake
             val inp = DataInputStream(BufferedInputStream(client.getInputStream()))
             val out = client.getOutputStream()
             val target = when (inp.readUnsignedByte()) {
@@ -93,14 +93,14 @@ class SocksServer(
                 uplink.join(1000)
             }
         } catch (_: Exception) {
-            // Сюди ж потрапляє InterruptedException, коли тунель вимикають:
-            // будь-який виняток з потоку пулу інакше валить увесь додаток
+            // InterruptedException lands here too when the tunnel is turned off:
+            // any exception escaping a pool thread would crash the whole app
         }
     }
 
     private fun socks5(inp: DataInputStream, out: OutputStream): Target? {
         val n = inp.readUnsignedByte()
-        inp.readFully(ByteArray(n)) // методи автентифікації: приймаємо без пароля
+        inp.readFully(ByteArray(n)) // auth methods: we accept "no authentication"
         out.write(byteArrayOf(5, 0))
         out.flush()
 
@@ -114,7 +114,7 @@ class SocksServer(
             else -> null
         }
         val port = inp.readUnsignedShort()
-        if (cmd != 1 || host == null) { // підтримуємо лише CONNECT
+        if (cmd != 1 || host == null) { // only CONNECT is supported
             out.write(byteArrayOf(5, 7, 0, 1, 0, 0, 0, 0, 0, 0))
             out.flush()
             return null
@@ -127,7 +127,7 @@ class SocksServer(
         val port = inp.readUnsignedShort()
         val ip = ByteArray(4).also { inp.readFully(it) }
         readCString(inp) // user id
-        // SOCKS4a: 0.0.0.x означає, що далі йде ім'я хоста
+        // SOCKS4a: 0.0.0.x means a host name follows
         val host = if (ip[0] == 0.toByte() && ip[1] == 0.toByte() && ip[2] == 0.toByte() && ip[3] != 0.toByte()) {
             readCString(inp)
         } else {

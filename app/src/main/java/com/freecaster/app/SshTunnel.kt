@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import androidx.annotation.StringRes
 import androidx.core.content.ContextCompat
 import androidx.webkit.ProxyConfig
 import androidx.webkit.ProxyController
@@ -24,21 +25,21 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 
 /**
- * SSH-тунель для браузера, аналог `ssh -D`: локальний SOCKS-сервер,
- * з'єднання якого йдуть каналами direct-tcpip через SSH.
+ * SSH tunnel for the browser, like `ssh -D`: a local SOCKS server whose
+ * connections go through SSH as direct-tcpip channels.
  *
- * Kill switch: поки тунель увімкнено, WebView і StreamProxy ходять лише через
- * SOCKS. Якщо SSH відпав, нові з'єднання чекають на перепідключення (до [WAIT_MS])
- * і ніколи не йдуть напряму.
+ * Kill switch: while the tunnel is on, the WebView and StreamProxy only go through
+ * SOCKS. If SSH drops, new connections wait for the reconnect (up to [WAIT_MS])
+ * and never go direct.
  */
 object SshTunnel {
     enum class State { OFF, CONNECTING, CONNECTED, RECONNECTING, ERROR }
 
-    /** [since]: elapsedRealtime, коли почався поточний стан. */
+    /** [since]: elapsedRealtime when the current state began; [reason]: string resource. */
     data class Status(
         val state: State,
         val since: Long = SystemClock.elapsedRealtime(),
-        val message: String? = null,
+        @StringRes val reason: Int? = null,
         val hostKeyChanged: Boolean = false,
     )
 
@@ -62,16 +63,16 @@ object SshTunnel {
 
     val isEnabled: Boolean get() = enabled
 
-    /** Порт локального SOCKS, поки тунель увімкнено (навіть під час перепідключення). */
+    /** Local SOCKS port while the tunnel is on (even while reconnecting). */
     val socksPort: Int? get() = if (enabled) socks?.port else null
 
-    /** Скільки байтів пройшло через тунель з моменту увімкнення. */
+    /** Bytes sent through the tunnel since it was turned on. */
     val trafficBytes: Long get() = traffic.get()
 
     fun addListener(l: (Status) -> Unit) = listeners.add(l)
     fun removeListener(l: (Status) -> Unit) = listeners.remove(l)
 
-    /** [onReady] викликається на головному потоці, коли WebView уже ходить через тунель. */
+    /** [onReady] runs on the main thread once the WebView goes through the tunnel. */
     @Synchronized
     fun start(ctx: Context, onReady: (() -> Unit)? = null): Boolean {
         val app = ctx.applicationContext
@@ -117,7 +118,7 @@ object SshTunnel {
         TunnelService.stop(app)
     }
 
-    /** Нові дані сервера. SOCKS-порт і проксі WebView не змінюються, тож нічого не "протікає". */
+    /** New server settings. The SOCKS port and WebView proxy stay the same, so nothing leaks. */
     @Synchronized
     fun restart(ctx: Context) {
         if (!enabled) return
@@ -130,23 +131,23 @@ object SshTunnel {
         launchWorker(cfg, SshSettings.knownHosts(app))
     }
 
-    /** Кнопка "Повторити" після помилки. */
+    /** The "Retry" button after an error. */
     fun retry(ctx: Context) = restart(ctx)
 
     /**
-     * Змінилась мережа (Wi-Fi ↔ мобільна). Старий сокет уже мертвий,
-     * тож одразу перепідключаємось, не чекаючи keepalive.
+     * The network changed (Wi-Fi ↔ mobile). The old socket is already dead,
+     * so reconnect right away instead of waiting for keepalive.
      */
     fun onNetworkChanged(changed: Boolean) {
         if (!enabled) return
-        // Зміна мережі рве живу сесію; поява мережі під час очікування — пробуємо одразу
+        // A network change kills a live session; a network appearing during backoff retries at once
         if (changed || session == null) kick = true
         synchronized(lock) { lock.notifyAll() }
     }
 
-    // ---------------- Робочий потік ----------------
+    // ---------------- Worker thread ----------------
 
-    // disconnect() пише в сокет, тож не на головному потоці
+    // disconnect() writes to the socket, so keep it off the main thread
     private fun dropSession() {
         val s = session ?: return
         session = null
@@ -172,8 +173,8 @@ object SshTunnel {
                 if (!alive(gen)) return
                 val fatal = fatalError(e)
                 if (fatal != null) {
-                    // Неправильний пароль чи підмінений сервер: не довбимо його повторами
-                    setStatus(Status(State.ERROR, message = fatal, hostKeyChanged = isHostKeyChanged(e)), gen)
+                    // Wrong password or a spoofed server: don't hammer it with retries
+                    setStatus(Status(State.ERROR, reason = fatal, hostKeyChanged = isHostKeyChanged(e)), gen)
                     waitWhile { alive(gen) }
                     return
                 }
@@ -188,7 +189,7 @@ object SshTunnel {
             }
 
             synchronized(lock) {
-                // restart()/stop() могли статися, поки ми підключались
+                // restart()/stop() may have happened while we were connecting
                 if (!alive(gen)) {
                     thread(isDaemon = true) { s.disconnect() }
                     return
@@ -199,7 +200,7 @@ object SshTunnel {
             connectedOnce = true
             attempt = 0
             kick = false
-            setStatus(Status(State.CONNECTED, message = "Підключено до ${cfg.host}"), gen)
+            setStatus(Status(State.CONNECTED), gen)
 
             waitWhile { alive(gen) && s.isConnected && !kick }
 
@@ -228,7 +229,7 @@ object SshTunnel {
         val s = jsch.getSession(cfg.user, cfg.host, cfg.port)
         s.setPassword(cfg.password)
         s.userInfo = Prompter(cfg.password)
-        // Перший раз запам'ятовуємо ключ сервера, далі не пускаємо, якщо його підмінили
+        // Remember the server key the first time, refuse to connect if it changes later
         s.setConfig("StrictHostKeyChecking", "ask")
         s.setConfig("PreferredAuthentications", "password,keyboard-interactive")
         s.setServerAliveInterval(15_000)
@@ -237,31 +238,33 @@ object SshTunnel {
         return s
     }
 
-    private fun fatalError(e: Exception): String? {
+    @StringRes
+    private fun fatalError(e: Exception): Int? {
         val msg = e.message ?: ""
         return when {
-            isHostKeyChanged(e) -> "Ключ SSH-сервера змінився. Якщо ви не перевстановлювали сервер, це може бути підміна."
-            msg.contains("Auth fail") || msg.contains("Auth cancel") -> "Неправильний користувач або пароль"
+            isHostKeyChanged(e) -> R.string.err_host_key
+            msg.contains("Auth fail") || msg.contains("Auth cancel") -> R.string.err_auth
             else -> null
         }
     }
 
     private fun isHostKeyChanged(e: Exception) = e.message?.contains("HostKey has been changed") == true
 
-    private fun transientError(e: Exception): String = when (e.cause ?: e) {
-        is UnknownHostException -> "Сервер не знайдено або немає інтернету"
-        is ConnectException -> "Сервер не приймає з'єднання"
-        is SocketTimeoutException -> "Сервер не відповідає"
-        else -> "Немає з'єднання з сервером"
+    @StringRes
+    private fun transientError(e: Exception): Int = when (e.cause ?: e) {
+        is UnknownHostException -> R.string.err_unknown_host
+        is ConnectException -> R.string.err_refused
+        is SocketTimeoutException -> R.string.err_timeout
+        else -> R.string.err_no_connection
     }
 
     private class Prompter(private val pass: String) : UserInfo, UIKeyboardInteractive {
         private var kbdAsked = false
         override fun getPassphrase(): String? = null
         override fun getPassword(): String = pass
-        override fun promptPassword(message: String?) = false // без повторів з тим самим паролем
+        override fun promptPassword(message: String?) = false // no retries with the same password
         override fun promptPassphrase(message: String?) = false
-        override fun promptYesNo(message: String?) = true // лише новий сервер (TOFU); змінений ключ JSch відхиляє сам
+        override fun promptYesNo(message: String?) = true // only for a new server (TOFU); JSch rejects a changed key itself
         override fun showMessage(message: String?) {}
         override fun promptKeyboardInteractive(
             destination: String?, name: String?, instruction: String?,
@@ -273,7 +276,7 @@ object SshTunnel {
         }
     }
 
-    // ---------------- Канали для SOCKS ----------------
+    // ---------------- Channels for SOCKS ----------------
 
     private fun awaitSession(deadline: Long): Session? {
         synchronized(lock) {
@@ -291,7 +294,7 @@ object SshTunnel {
     private fun openUpstream(host: String, port: Int): Upstream {
         val deadline = SystemClock.elapsedRealtime() + WAIT_MS
         while (true) {
-            val s = awaitSession(deadline) ?: throw IOException("SSH-тунель недоступний")
+            val s = awaitSession(deadline) ?: throw IOException("SSH tunnel unavailable")
             val ch = try {
                 s.openChannel("direct-tcpip") as ChannelDirectTCPIP
             } catch (e: JSchException) {
@@ -300,14 +303,14 @@ object SshTunnel {
             }
             ch.setHost(host)
             ch.setPort(port)
-            // Потоки беремо до connect, щоб не загубити перші байти від сервера
+            // Grab the streams before connect so the server's first bytes aren't lost
             val input = ch.inputStream
             val output = ch.outputStream
             try {
                 ch.connect(10_000)
             } catch (e: JSchException) {
                 ch.disconnect()
-                // Сесія щойно впала: чекаємо нову, сторінка просто довше вантажиться
+                // The session just died: wait for a new one, the page just loads a bit longer
                 if (s.isConnected || SystemClock.elapsedRealtime() >= deadline) throw IOException(e)
                 continue
             }
@@ -324,17 +327,17 @@ object SshTunnel {
         try {
             ProxyController.getInstance().setProxyOverride(config("socks5"), exec, done)
         } catch (e: IllegalArgumentException) {
-            // Старіші WebView знають лише "socks"; наш сервер розуміє і SOCKS4, і SOCKS5
+            // Older WebViews only know "socks"; our server speaks both SOCKS4 and SOCKS5
             ProxyController.getInstance().setProxyOverride(config("socks"), exec, done)
         }
     }
 
-    // ---------------- Стан ----------------
+    // ---------------- State ----------------
 
-    /** Не скидаємо таймер, поки триває той самий стан: UI рахує, скільки ми вже без з'єднання. */
-    private fun keepSince(state: State, message: String): Status {
+    /** Keep the timer while the state is unchanged: the UI counts how long we've been offline. */
+    private fun keepSince(state: State, @StringRes reason: Int): Status {
         val cur = status
-        return if (cur.state == state) cur.copy(message = message) else Status(state, message = message)
+        return if (cur.state == state) cur.copy(reason = reason) else Status(state, reason = reason)
     }
 
     private fun setStatus(s: Status, gen: Int? = null) {
@@ -345,11 +348,16 @@ object SshTunnel {
         main.post { listeners.forEach { it(s) } }
     }
 
-    fun describe(s: Status = status): String = when (s.state) {
-        State.OFF -> "Вимкнено"
-        State.CONNECTING -> s.message?.let { "Підключення… ($it)" } ?: "Підключення…"
-        State.CONNECTED -> "Підключено до $host"
-        State.RECONNECTING -> s.message?.let { "Перепідключення… ($it)" } ?: "Перепідключення…"
-        State.ERROR -> s.message ?: "Помилка"
+    fun describe(ctx: Context, s: Status = status): String {
+        val reason = s.reason?.let { ctx.getString(it) }
+        return when (s.state) {
+            State.OFF -> ctx.getString(R.string.st_off)
+            State.CONNECTING -> reason?.let { ctx.getString(R.string.st_connecting_reason, it) }
+                ?: ctx.getString(R.string.st_connecting)
+            State.CONNECTED -> ctx.getString(R.string.st_connected, host)
+            State.RECONNECTING -> reason?.let { ctx.getString(R.string.st_reconnecting_reason, it) }
+                ?: ctx.getString(R.string.st_reconnecting)
+            State.ERROR -> reason ?: ctx.getString(R.string.st_error)
+        }
     }
 }

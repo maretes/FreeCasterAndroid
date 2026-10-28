@@ -1,51 +1,68 @@
-# FreeCaster: свій Web Video Caster без реклами
+# FreeCaster: an ad-free web video caster for Android
 
-Браузер для Android, який знаходить відео на сайтах і транслює його на Chromecast.
+An Android browser that finds videos on websites and casts them to Chromecast (Google Cast).
+The app is in English by default; Ukrainian can be picked in menu → **Language**.
 
-## Що вміє
-- Браузер з адресним рядком і пошуком Google
-- Сам знаходить відео на сторінці (MP4, HLS `.m3u8`, DASH, WebM...), навіть усередині вкладених фреймів
-- Кнопка **«Відео: N»** відкриває список знайденого → **Транслювати на Chromecast**
-- **Через телефон**: якщо сайт не віддає відео телевізору, телефон пропускає його через себе з потрібними заголовками (Referer, Cookie). Сповіщення тримає трансляцію при вимкненому екрані
-- Пульт: пауза, перемотування, гучність, а також міні-плеєр унизу й керування з шторки сповіщень
-- Блокування реклами й спливаючих вікон (вмикається в меню)
-- «Поділитися → FreeCaster» з будь-якого додатка
+## Features
+- Browser with an address bar and Google search
+- Finds videos on the page automatically (MP4, HLS `.m3u8`, DASH, WebM…), including inside nested frames
+- Shows the duration of each video and hides clips shorter than a minute (usually ads), with a button to show them anyway
+- **Cast via phone**: if a site refuses to serve the video to the TV, the phone relays it with the required headers (Referer, Cookie). A notification keeps it running with the screen off
+- Remote: pause, seek, volume, plus a mini player and notification controls
+- **Phone audio**: video on the TV, sound on the phone's headphones / Bluetooth speaker
+- Built-in **SSH tunnel** (like `ssh -D`) for the in-app browser, with a kill switch
+- Ad and pop-up blocking (toggle in the menu)
+- "Share → FreeCaster" from any app
+- In-app updates from GitHub Releases
+- Material You design (colors follow the wallpaper on Android 12+), English and Ukrainian UI
 
-## Як отримати APK без встановлення програм (через GitHub)
-1. Зареєструйтеся на github.com (безкоштовно).
-2. **New repository** → назва `FreeCaster` → **Create**.
-3. **uploading an existing file** → перетягніть усі файли й папки з архіву (разом з папкою `.github`) → **Commit**.
-   Порада: прихована папка `.github` іноді не перетягується. Тоді створіть файл вручну: **Add file → Create new file**, назва `.github/workflows/build.yml`, вміст скопіюйте з архіву.
-4. Вкладка **Actions** → збірка **Build APK** (5–8 хв) → унизу **Artifacts → FreeCaster-apk**, завантажте.
-5. Розпакуйте zip, відкрийте `.apk` на Pixel → дозвольте встановлення з цього джерела.
+## Install
+1. Open the [latest release](https://github.com/maretes/FreeCasterAndroid/releases/latest) on the phone and download `FreeCaster.apk`.
+2. Open the file and allow installs from this source.
+3. Later updates: menu → **Check for updates** → **Update**.
 
-## Через Android Studio
-Відкрийте папку `FreeCaster` → дочекайтеся синхронізації Gradle → підключіть телефон (USB-налагодження) → ▶ Run.
+## Usage
+1. The phone and the Chromecast must be on the same Wi-Fi network.
+2. Tap the cast icon at the top and pick your Chromecast.
+3. Open a website and start the video on the page (so the player begins loading).
+4. Tap **Videos: N** and pick a video (the longest ones are at the top) → **Cast to Chromecast**.
+5. If the TV can't play it, the app automatically retries via the phone.
 
-## Як користуватися
-1. Телефон і Chromecast мають бути в одній Wi-Fi мережі.
-2. Натисніть значок трансляції вгорі → виберіть Chromecast.
-3. Відкрийте сайт, увімкніть відео на сторінці (щоб плеєр почав завантаження).
-4. Кнопка **«Відео: N»** → виберіть потрібне (зазвичай HLS або MP4 угорі списку) → **Транслювати**.
-5. Якщо не грає, додаток сам спробує варіант «через телефон».
+## SSH tunnel (like `ssh -D 1080`)
+1. Menu → **SSH settings**: host, port, user, password → **Save**.
+   The host field also accepts `user@host` or a whole `ssh ... user@host` command.
+2. The key button at the top toggles the tunnel with one tap: grey = off, yellow = connecting, green = connected, red = error.
+   The traffic sent through the tunnel is shown under it. Long-press for status and settings.
+3. The tunnel covers only the FreeCaster browser. While it is on, pages and videos never bypass it (kill switch),
+   and casting automatically goes through the phone so the TV traffic is tunneled too.
+4. If the connection drops, the app silently reconnects in the background, and video on the Chromecast resumes from where it stopped.
+5. App updates always go directly, regardless of the tunnel.
 
-## SSH-тунель (як `ssh -D 1080`)
-1. Меню → **Налаштування SSH**: сервер, порт, користувач, пароль → **Зберегти**. У поле сервера можна вставити й `user@host` або цілу команду `ssh ... user@host`.
-2. Кнопка з ключем угорі вмикає/вимикає тунель одним дотиком: сіра (вимкнено), жовта (підключення), зелена (працює), червона (помилка). Під нею видно, скільки МБ пройшло через тунель. Довге натискання: стан і налаштування.
-3. Тунель працює лише для браузера FreeCaster. Поки він увімкнений, сторінки й відео не йдуть повз нього (kill switch), а трансляція автоматично йде через телефон.
-4. Коли зв'язок обривається, додаток сам перепідключається у фоні, а відео на Chromecast докачується з того місця, де зупинилось.
+## Phone audio
+While casting: menu (or the remote's menu) → **🎧 Audio on phone**.
+The video stays on the TV (muted) and the phone plays the sound: headphones, a Bluetooth speaker,
+or a Google Home Mini paired as a Bluetooth speaker ("Hey Google, Bluetooth pairing").
+**Audio delay…** lines the sound up with the picture (Bluetooth is usually 150–300 ms).
+Tap the toggle again to send the sound back to the Chromecast. Live streams are not supported yet.
 
-## Звук на телефоні
-Під час трансляції: меню (або меню пульта) → **🎧 Звук на телефоні**. Відео лишається на ТВ без звуку,
-а звук грає телефон: у навушники, Bluetooth-колонку або Google Home Mini, підключений як Bluetooth-колонка.
-**Затримка звуку…** підганяє звук під губи (для Bluetooth зазвичай 150–300 мс). Повторне натискання повертає звук на Chromecast.
+## Building
+- **GitHub Actions**: every push builds the APK (artifact `FreeCaster-apk`). Pushes to `main` are also published
+  as GitHub Release `build-N`, where N is the app's `versionCode`.
+- Releases need the repository secrets `KEYSTORE_BASE64` and `KEYSTORE_PASSWORD` (a permanent signing key).
+  Without them the APK is signed with a throwaway debug key, no release is created, and it can't be installed over an existing version.
+- **Android Studio**: open the project, wait for Gradle sync, connect the phone (USB debugging) → ▶ Run.
 
-## Оновлення
-Меню → **Перевірити оновлення** → **Оновити**. Кожна збірка в `main` публікується як GitHub Release `build-N`.
-Для цього в репозиторії потрібні секрети `KEYSTORE_BASE64` і `KEYSTORE_PASSWORD` (постійний ключ підпису).
-Без них APK підписується тимчасовим ключем, і оновлення поверх старої версії не встановиться.
+## Where to change things
+- Ad domain list: `AdBlocker.kt`
+- Video detection: `VideoDetector.kt`, duration probing: `VideoProbe.kt`
+- Proxy for the TV: `StreamProxy.kt`
+- SSH tunnel: `SshTunnel.kt`, `SocksServer.kt`
+- Phone audio: `AudioRelay.kt`
+- Updates: `Updater.kt`
 
-## Як змінювати
-- Список рекламних доменів: `AdBlocker.kt`
-- Як знаходяться відео: `VideoDetector.kt`
-- Проксі: `StreamProxy.kt`
+## Language
+Menu → **Language** → English / Українська. The app restarts the screen in the chosen language.
+Texts live in `res/values/strings.xml` (English) and `res/values-uk/strings.xml` (Ukrainian).
+
+## Support
+Questions, bug reports and support for the project: **kolom100@gmail.com** (also in menu → **About & support**)

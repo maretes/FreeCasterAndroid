@@ -4,7 +4,7 @@
     android:layout_height="match_parent"
     android:background="?attr/selectableItemBackgroundBorderless"
     android:clickable="true"
-    android:contentDescription="SSH-тунель"
+    android:contentDescription="@string/menu_tunnel"
     android:focusable="true"
     android:gravity="center"
     android:minWidth="48dp"

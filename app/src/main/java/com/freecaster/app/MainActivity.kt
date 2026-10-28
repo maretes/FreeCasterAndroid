@@ -28,13 +28,18 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ImageButton
+import android.widget.LinearLayout
 import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.app.AppCompatDelegate
+import androidx.core.os.LocaleListCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
@@ -48,6 +53,7 @@ import com.google.android.gms.cast.MediaMetadata
 import com.google.android.gms.cast.framework.CastButtonFactory
 import com.google.android.gms.cast.framework.CastContext
 import com.google.android.material.appbar.MaterialToolbar
+import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.color.MaterialColors
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
@@ -63,13 +69,15 @@ class MainActivity : AppCompatActivity() {
     private var tunnelTraffic: TextView? = null
     private var lastTunnelState = SshTunnel.State.OFF
     private lateinit var address: EditText
+    private lateinit var addressIcon: ImageView
+    private lateinit var addressClear: ImageButton
     private lateinit var fab: ExtendedFloatingActionButton
     private lateinit var progress: LinearProgressIndicator
     private var castContext: CastContext? = null
 
     private val videos = LinkedHashMap<String, DetectedVideo>()
     private val probed = HashSet<String>()
-    private var pageGen = 0 // щоб результати перевірки старої сторінки не потрапили в нову
+    private var pageGen = 0 // so probe results for an old page don't land on the new one
     @Volatile private var adBlock = true
     @Volatile private var userAgent = ""
 
@@ -79,9 +87,9 @@ class MainActivity : AppCompatActivity() {
     private val prefs by lazy { getSharedPreferences("main", MODE_PRIVATE) }
 
     private val tunnelListener: (SshTunnel.Status) -> Unit = { st ->
-        // Помилку показуємо один раз, коли вона з'явилась
+        // Show an error once, when it appears
         if (st.state == SshTunnel.State.ERROR && lastTunnelState != SshTunnel.State.ERROR) {
-            toast("SSH: ${SshTunnel.describe(st)}")
+            toast(getString(R.string.ssh_error_toast, SshTunnel.describe(this, st)))
         }
         lastTunnelState = st.state
         updateTunnelIcon()
@@ -105,13 +113,15 @@ class MainActivity : AppCompatActivity() {
 
         web = findViewById(R.id.web)
         address = findViewById(R.id.address)
+        addressIcon = findViewById(R.id.address_icon)
+        addressClear = findViewById(R.id.address_clear)
         fab = findViewById(R.id.fab)
         progress = findViewById(R.id.progress)
 
         castContext = try {
             CastContext.getSharedInstance(this)
         } catch (e: Exception) {
-            toast("Google Cast недоступний на цьому пристрої")
+            toast(getString(R.string.cast_unavailable))
             null
         }
 
@@ -134,7 +144,7 @@ class MainActivity : AppCompatActivity() {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
 
-        // Тунель був увімкнений: спершу проксі для WebView, потім перша сторінка (kill switch)
+        // The tunnel was on: set up the WebView proxy first, then load the first page (kill switch)
         val firstLoad = {
             if (!handleIntent(intent)) {
                 if (savedInstanceState != null) web.restoreState(savedInstanceState)
@@ -182,7 +192,7 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
-    /** Посилання, яким поділились з іншого додатка або відкрили через нас. */
+    /** A link shared from another app or opened with this app. */
     private fun handleIntent(intent: Intent?): Boolean {
         val url = when (intent?.action) {
             Intent.ACTION_VIEW -> intent.dataString
@@ -194,7 +204,7 @@ class MainActivity : AppCompatActivity() {
         return true
     }
 
-    // ---------------- Браузер ----------------
+    // ---------------- Browser ----------------
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun setupWebView() {
@@ -206,7 +216,7 @@ class MainActivity : AppCompatActivity() {
             builtInZoomControls = true
             displayZoomControls = false
             mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-            setSupportMultipleWindows(true) // разом з onCreateWindow=false блокує попапи
+            setSupportMultipleWindows(true) // together with onCreateWindow=false this blocks pop-ups
             javaScriptCanOpenWindowsAutomatically = false
             userAgent = userAgentString
         }
@@ -230,14 +240,14 @@ class MainActivity : AppCompatActivity() {
 
             override fun shouldOverrideUrlLoading(view: WebView, req: WebResourceRequest): Boolean {
                 val scheme = req.url.scheme ?: return true
-                if (scheme != "http" && scheme != "https") return true // intent://, market:// — часто реклама
+                if (scheme != "http" && scheme != "https") return true // intent://, market:// are usually ads
                 if (adBlock && AdBlocker.isAd(req.url.host)) return true
                 return false
             }
 
             override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
                 clearVideos()
-                if (!address.hasFocus()) address.setText(url)
+                showUrl(url)
             }
 
             override fun onPageFinished(view: WebView, url: String) {
@@ -245,7 +255,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
-                if (!address.hasFocus()) address.setText(url)
+                showUrl(url)
             }
         }
 
@@ -256,7 +266,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: android.os.Message): Boolean =
-                false // блокуємо спливаючі вікна
+                false // block pop-up windows
 
             override fun onShowCustomView(view: View, callback: CustomViewCallback) {
                 enterFullscreen(view, callback)
@@ -298,6 +308,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupAddressBar() {
+        address.setOnFocusChangeListener { _, focused ->
+            addressClear.visibility = if (focused) View.VISIBLE else View.GONE
+            if (focused) addressIcon.setImageResource(R.drawable.ic_search) else web.url?.let { showUrl(it) }
+        }
+        addressClear.setOnClickListener { address.text.clear() }
         address.setOnEditorActionListener { _, actionId, event ->
             if (actionId == EditorInfo.IME_ACTION_GO ||
                 (event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN)
@@ -311,6 +326,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** Lock icon for HTTPS, search icon otherwise. */
+    private fun showUrl(url: String) {
+        if (address.hasFocus()) return
+        address.setText(url)
+        addressIcon.setImageResource(if (url.startsWith("https://")) R.drawable.ic_lock else R.drawable.ic_search)
+    }
+
     private fun toUrl(input: String): String {
         val t = input.trim()
         return when {
@@ -320,7 +342,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------------- Знайдені відео ----------------
+    // ---------------- Found videos ----------------
 
     private fun addVideo(v: DetectedVideo) {
         val existing = videos[v.url]
@@ -357,12 +379,12 @@ class MainActivity : AppCompatActivity() {
     private fun updateFab() {
         val main = videos.values.count { !it.isShort }
         fab.visibility = if (videos.isEmpty()) View.GONE else View.VISIBLE
-        fab.text = if (main > 0) "Відео: $main" else "Короткі: ${videos.size}"
+        fab.text = if (main > 0) getString(R.string.videos_count, main) else getString(R.string.short_count, videos.size)
     }
 
     private fun formatDuration(d: Double?): String? {
         if (d == null) return null
-        if (d == VideoProbe.LIVE) return "LIVE"
+        if (d == VideoProbe.LIVE) return getString(R.string.live)
         val t = d.toLong()
         val h = t / 3600
         val m = t % 3600 / 60
@@ -371,9 +393,11 @@ class MainActivity : AppCompatActivity() {
         else String.format(java.util.Locale.US, "%d:%02d", m, s)
     }
 
+    private fun kindLabel(k: VideoKind) = if (k == VideoKind.OTHER) getString(R.string.kind_video) else k.label
+
     private fun showVideoList(showShort: Boolean = false) {
-        // Пряма трансляція і найдовші відео вгору (зазвичай це саме те, що треба),
-        // потім невідомої тривалості за типом: HLS, MP4…
+        // Live streams and the longest videos first (usually what you want),
+        // then unknown durations by type: HLS, MP4…
         val all = videos.values.sortedWith(
             compareByDescending<DetectedVideo> { v ->
                 val d = v.duration ?: -2.0
@@ -383,57 +407,82 @@ class MainActivity : AppCompatActivity() {
         val shortCount = all.count { it.isShort }
         val list = if (showShort) all else all.filter { !it.isShort }
         if (list.isEmpty() && !showShort) return showVideoList(showShort = true)
-        val labels = list.map { v ->
+
+        val sheet = BottomSheetDialog(this)
+        val view = layoutInflater.inflate(R.layout.sheet_videos, null)
+        view.findViewById<TextView>(R.id.sheet_title).text = getString(R.string.found_videos)
+        val items = view.findViewById<LinearLayout>(R.id.video_items)
+        for (v in list) {
+            val item = layoutInflater.inflate(R.layout.item_video, items, false)
             val u = Uri.parse(v.url)
-            val name = u.lastPathSegment?.take(50) ?: v.url.take(50)
-            val info = listOfNotNull(v.kind.label, formatDuration(v.duration), u.host).joinToString(" · ")
-            "$info\n$name"
-        }.toTypedArray()
-        val b = MaterialAlertDialogBuilder(this)
-            .setTitle("Знайдені відео")
-            .setItems(labels) { _, i -> showVideoActions(list[i]) }
-            .setNegativeButton("Закрити", null)
-        // Короткі (менше хвилини) зазвичай реклама, ховаємо їх
-        if (!showShort && shortCount > 0) {
-            b.setNeutralButton("Короткі ($shortCount)") { _, _ -> showVideoList(showShort = true) }
+            item.findViewById<TextView>(R.id.video_kind).text = kindLabel(v.kind)
+            item.findViewById<TextView>(R.id.video_title).text = u.lastPathSegment ?: v.url
+            item.findViewById<TextView>(R.id.video_host).text = u.host ?: ""
+            item.findViewById<TextView>(R.id.video_duration).apply {
+                text = formatDuration(v.duration) ?: ""
+                if (v.duration == VideoProbe.LIVE) setTextColor(ContextCompat.getColor(context, R.color.tunnel_error))
+            }
+            item.setOnClickListener {
+                sheet.dismiss()
+                showVideoActions(v)
+            }
+            items.addView(item)
         }
-        b.show()
+        // Short clips (under a minute) are usually ads, so they're hidden
+        view.findViewById<Button>(R.id.show_short).apply {
+            if (!showShort && shortCount > 0) {
+                visibility = View.VISIBLE
+                text = getString(R.string.show_short, shortCount)
+                setOnClickListener {
+                    sheet.dismiss()
+                    showVideoList(showShort = true)
+                }
+            }
+        }
+        sheet.setContentView(view)
+        sheet.show()
     }
 
     private fun showVideoActions(v: DetectedVideo) {
-        val actions = arrayOf(
-            "📺 Транслювати на Chromecast",
-            "📡 Через телефон (якщо не грає)",
-            "▶️ Відкрити в плеєрі на телефоні",
-            "📋 Копіювати посилання",
-        )
-        MaterialAlertDialogBuilder(this)
-            .setTitle(v.kind.label)
-            .setItems(actions) { _, i ->
-                when (i) {
-                    0 -> cast(v, viaPhone = false)
-                    1 -> cast(v, viaPhone = true)
-                    2 -> openExternal(v)
-                    3 -> copy(v.url)
-                }
+        val sheet = BottomSheetDialog(this)
+        val view = layoutInflater.inflate(R.layout.sheet_actions, null)
+        val u = Uri.parse(v.url)
+        view.findViewById<TextView>(R.id.action_title).text = u.lastPathSegment ?: v.url
+        view.findViewById<TextView>(R.id.action_subtitle).text =
+            listOfNotNull(kindLabel(v.kind), formatDuration(v.duration), u.host).joinToString(" · ")
+        val items = view.findViewById<LinearLayout>(R.id.action_items)
+        fun action(icon: Int, title: Int, run: () -> Unit) {
+            val row = layoutInflater.inflate(R.layout.item_action, items, false) as TextView
+            row.setText(title)
+            row.setCompoundDrawablesRelativeWithIntrinsicBounds(icon, 0, 0, 0)
+            row.setOnClickListener {
+                sheet.dismiss()
+                run()
             }
-            .show()
+            items.addView(row)
+        }
+        action(R.drawable.ic_cast, R.string.action_cast) { cast(v, viaPhone = false) }
+        action(R.drawable.ic_phone, R.string.action_cast_phone) { cast(v, viaPhone = true) }
+        action(R.drawable.ic_open, R.string.action_open) { openExternal(v) }
+        action(R.drawable.ic_copy, R.string.action_copy) { copy(v.url) }
+        sheet.setContentView(view)
+        sheet.show()
     }
 
     // ---------------- Chromecast ----------------
 
     private fun cast(v: DetectedVideo, viaPhone: Boolean) {
-        // Chromecast сам у тунель не потрапить, тож під тунелем відео йде лише через телефон
+        // The Chromecast can't use the tunnel itself, so with the tunnel on video only goes via the phone
         if (!viaPhone && SshTunnel.isEnabled) return cast(v, viaPhone = true)
         val session = castContext?.sessionManager?.currentCastSession
         val client = session?.remoteMediaClient
         if (session == null || !session.isConnected || client == null) {
-            toast("Спочатку натисніть значок трансляції вгорі й виберіть Chromecast")
+            toast(getString(R.string.pick_chromecast))
             return
         }
         val url = if (viaPhone) {
             val ip = NetUtils.localIpv4(this) ?: run {
-                toast("Телефон має бути в тій самій Wi-Fi мережі, що й Chromecast")
+                toast(getString(R.string.same_wifi))
                 return
             }
             ProxyService.start(this)
@@ -441,7 +490,7 @@ class MainActivity : AppCompatActivity() {
         } else v.url
 
         val meta = MediaMetadata(MediaMetadata.MEDIA_TYPE_MOVIE).apply {
-            putString(MediaMetadata.KEY_TITLE, web.title ?: "Відео")
+            putString(MediaMetadata.KEY_TITLE, web.title ?: getString(R.string.kind_video))
             putString(MediaMetadata.KEY_SUBTITLE, Uri.parse(v.url).host ?: "")
         }
         val info = MediaInfo.Builder(url)
@@ -459,10 +508,10 @@ class MainActivity : AppCompatActivity() {
                 AudioRelay.onCastStarted(this, v, viaPhone)
                 startActivity(Intent(this, ExpandedControlsActivity::class.java))
             } else if (!viaPhone) {
-                toast("Chromecast не зміг відкрити відео. Пробую через телефон…")
+                toast(getString(R.string.cast_retry_phone))
                 cast(v, viaPhone = true)
             } else {
-                toast("Не вдалося відтворити (код ${result.status.statusCode})")
+                toast(getString(R.string.cast_failed, result.status.statusCode))
             }
         }
         if (!viaPhone) ProxyService.stop(this)
@@ -472,16 +521,16 @@ class MainActivity : AppCompatActivity() {
         try {
             startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse(v.url), v.kind.mime))
         } catch (e: Exception) {
-            toast("Немає плеєра для цього відео")
+            toast(getString(R.string.no_player))
         }
     }
 
     private fun copy(text: String) {
         getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("video", text))
-        toast("Скопійовано")
+        toast(getString(R.string.copied))
     }
 
-    // ---------------- Меню ----------------
+    // ---------------- Menu ----------------
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.main_menu, menu)
@@ -490,7 +539,7 @@ class MainActivity : AppCompatActivity() {
             tunnelIcon = v.findViewById(R.id.tunnel_icon)
             tunnelTraffic = v.findViewById(R.id.tunnel_traffic)
             v.setOnClickListener { onTunnelClick() }
-            // Довге натискання: стан, налаштування, "Повторити"
+            // Long press: status, settings, "Retry"
             v.setOnLongClickListener {
                 if (SshSettings.load(this) == null) showSshSettings(connectAfter = true) else showTunnelStatus()
                 true
@@ -519,6 +568,8 @@ class MainActivity : AppCompatActivity() {
             R.id.action_update -> checkUpdates()
             R.id.action_audio_phone -> AudioRelay.toggle(this)
             R.id.action_audio_delay -> AudioRelay.showDelayDialog(this)
+            R.id.action_language -> showLanguages()
+            R.id.action_about -> showAbout()
             R.id.action_adblock -> {
                 adBlock = !adBlock
                 item.isChecked = adBlock
@@ -530,29 +581,29 @@ class MainActivity : AppCompatActivity() {
         return true
     }
 
-    // ---------------- Оновлення ----------------
+    // ---------------- Updates ----------------
 
     private fun checkUpdates() {
-        toast("Перевіряю оновлення…")
+        toast(getString(R.string.checking_updates))
         thread {
             val rel = runCatching { Updater.fetchLatest() }
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
                 val r = rel.getOrElse {
-                    toast("Не вдалося перевірити оновлення: ${it.message}")
+                    toast(getString(R.string.update_check_failed, it.message))
                     return@runOnUiThread
                 }
                 val current = Updater.currentBuild(this)
                 if (r.build <= current) {
-                    toast("У вас остання версія (збірка $current)")
+                    toast(getString(R.string.up_to_date, current.toInt()))
                     return@runOnUiThread
                 }
                 val size = if (r.size > 0) " · ${formatBytes(r.size)}" else ""
                 MaterialAlertDialogBuilder(this)
-                    .setTitle("Доступна збірка ${r.build}")
-                    .setMessage("Зараз встановлена збірка $current$size\n\n${r.notes.ifEmpty { "Без опису" }}")
-                    .setPositiveButton("Оновити") { _, _ -> startUpdate(r) }
-                    .setNegativeButton("Пізніше", null)
+                    .setTitle(getString(R.string.update_available, r.build.toInt()))
+                    .setMessage(getString(R.string.update_message, current.toInt(), size, r.notes.ifEmpty { getString(R.string.no_notes) }))
+                    .setPositiveButton(R.string.update) { _, _ -> startUpdate(r) }
+                    .setNegativeButton(R.string.later, null)
                     .show()
             }
         }
@@ -560,8 +611,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun startUpdate(r: Updater.Release) {
         if (!packageManager.canRequestPackageInstalls()) {
-            // Дозвіл дається один раз, далі оновлення в один дотик
-            toast("Дозвольте FreeCaster встановлювати додатки, поверніться і натисніть «Оновити» ще раз")
+            // Granted once; after that updates are one tap
+            toast(getString(R.string.allow_installs))
             startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
             return
         }
@@ -570,7 +621,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(64, 32, 64, 0)
         }
         val dlg = MaterialAlertDialogBuilder(this)
-            .setTitle("Завантаження збірки ${r.build}")
+            .setTitle(getString(R.string.downloading_build, r.build.toInt()))
             .setView(bar)
             .setCancelable(false)
             .show()
@@ -581,51 +632,86 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 runOnUiThread {
                     dlg.dismiss()
-                    toast("Помилка оновлення: ${e.message}")
+                    toast(getString(R.string.update_error, e.message))
                 }
             }
         }
     }
 
-    // ---------------- SSH-тунель ----------------
+    // ---------------- Language & about ----------------
+
+    private fun showLanguages() {
+        val tags = arrayOf("en", "uk")
+        val names = arrayOf("English", "Українська")
+        val current = AppCompatDelegate.getApplicationLocales()[0]?.language ?: "en"
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.menu_language)
+            .setSingleChoiceItems(names, tags.indexOf(current).coerceAtLeast(0)) { d, i ->
+                d.dismiss()
+                // The activity is recreated in the new language
+                AppCompatDelegate.setApplicationLocales(LocaleListCompat.forLanguageTags(tags[i]))
+            }
+            .show()
+    }
+
+    private fun showAbout() {
+        val email = getString(R.string.support_email)
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.app_name)
+            .setIcon(R.mipmap.ic_launcher)
+            .setMessage(getString(R.string.about_text, Updater.currentBuild(this).toInt(), email))
+            .setPositiveButton(R.string.write_email) { _, _ ->
+                try {
+                    startActivity(Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:$email"))
+                        .putExtra(Intent.EXTRA_SUBJECT, "FreeCaster"))
+                } catch (e: Exception) {
+                    copy(email)
+                }
+            }
+            .setNeutralButton(R.string.copy) { _, _ -> copy(email) }
+            .setNegativeButton(R.string.close, null)
+            .show()
+    }
+
+    // ---------------- SSH tunnel ----------------
 
     private fun onTunnelClick() {
         when {
             SshSettings.load(this) == null -> showSshSettings(connectAfter = true)
             !SshTunnel.isEnabled -> connectTunnel()
-            // Тут без підтвердження не можна: треба вирішити, чи довіряти новому ключу
+            // Needs a decision: whether to trust the new server key
             SshTunnel.status.hostKeyChanged -> showTunnelStatus()
-            // Звичайний перемикач: вимикаємо одразу, без діалогу
+            // Plain toggle: turn off right away, no dialog
             else -> SshTunnel.stop(this) { web.reload() }
         }
     }
 
     private fun connectTunnel() {
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
-            toast("WebView на телефоні не підтримує проксі. Оновіть Android System WebView")
+            toast(getString(R.string.webview_no_proxy))
             return
         }
-        if (!SshTunnel.start(this) { web.reload() }) toast("Не вдалося запустити тунель")
+        if (!SshTunnel.start(this) { web.reload() }) toast(getString(R.string.tunnel_start_failed))
     }
 
     private fun showTunnelStatus() {
         val st = SshTunnel.status
         val cfg = SshSettings.load(this)
-        val msg = SshTunnel.describe(st) + (cfg?.let { "\n\n${it.user}@${it.host}:${it.port}" } ?: "")
+        val msg = SshTunnel.describe(this, st) + (cfg?.let { "\n\n${it.user}@${it.host}:${it.port}" } ?: "")
         val b = MaterialAlertDialogBuilder(this)
-            .setTitle("SSH-тунель")
+            .setTitle(R.string.ssh_tunnel)
             .setMessage(msg)
-            .setNeutralButton("Налаштування") { _, _ -> showSshSettings(connectAfter = false) }
+            .setNeutralButton(R.string.settings) { _, _ -> showSshSettings(connectAfter = false) }
         if (SshTunnel.isEnabled) {
-            b.setNegativeButton("Відключити") { _, _ -> SshTunnel.stop(this) { web.reload() } }
+            b.setNegativeButton(R.string.disconnect) { _, _ -> SshTunnel.stop(this) { web.reload() } }
         }
         if (st.state == SshTunnel.State.ERROR) {
-            b.setPositiveButton(if (st.hostKeyChanged) "Довіряти новому ключу" else "Повторити") { _, _ ->
+            b.setPositiveButton(if (st.hostKeyChanged) R.string.trust_new_key else R.string.retry) { _, _ ->
                 if (st.hostKeyChanged) SshSettings.forgetHostKey(this)
                 SshTunnel.retry(this)
             }
         } else {
-            b.setPositiveButton("Закрити", null)
+            b.setPositiveButton(R.string.close, null)
         }
         b.show()
     }
@@ -643,14 +729,14 @@ class MainActivity : AppCompatActivity() {
             pass.setText(it.password)
         }
         MaterialAlertDialogBuilder(this)
-            .setTitle("SSH-сервер")
+            .setTitle(R.string.ssh_server)
             .setView(view)
-            .setPositiveButton("Зберегти") { _, _ ->
+            .setPositiveButton(R.string.save) { _, _ ->
                 val cfg = SshSettings.parse(
                     host.text.toString(), port.text.toString(), user.text.toString(), pass.text.toString()
                 )
                 if (cfg == null) {
-                    toast("Вкажіть сервер, користувача і пароль")
+                    toast(getString(R.string.ssh_fill_all))
                     return@setPositiveButton
                 }
                 SshSettings.save(this, cfg)
@@ -659,13 +745,13 @@ class MainActivity : AppCompatActivity() {
                     connectAfter -> connectTunnel()
                 }
             }
-            .setNegativeButton("Скасувати", null)
+            .setNegativeButton(R.string.cancel, null)
             .show()
     }
 
     /**
-     * Сіра: вимкнено; зелена: працює (і перші 10 с тихого перепідключення);
-     * жовта: підключаємось; червона: помилка або сервер недоступний понад хвилину.
+     * Grey: off; green: working (and the first 10 s of a silent reconnect);
+     * yellow: connecting; red: error or the server unreachable for over a minute.
      */
     private fun updateTunnelIcon() {
         val icon = tunnelIcon ?: return
@@ -690,7 +776,7 @@ class MainActivity : AppCompatActivity() {
             text = formatBytes(SshTunnel.trafficBytes)
         }
 
-        // Поки тунель увімкнено, щосекунди оновлюємо лічильник і колір
+        // While the tunnel is on, refresh the counter and color every second
         toolbar.removeCallbacks(tunnelRefresh)
         if (SshTunnel.isEnabled) toolbar.postDelayed(tunnelRefresh, 1_000)
     }
@@ -704,7 +790,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------------- Повний екран у браузері ----------------
+    // ---------------- Browser fullscreen ----------------
 
     private fun enterFullscreen(view: View, callback: WebChromeClient.CustomViewCallback) {
         if (fullscreenView != null) {

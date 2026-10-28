@@ -9,6 +9,7 @@ import android.view.KeyEvent
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.annotation.StringRes
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -30,17 +31,17 @@ import okhttp3.Request
 import kotlin.math.abs
 
 /**
- * "Звук на телефоні": відео грає на Chromecast без звуку, а телефон програє ту саму
- * доріжку (у навушники, Bluetooth-колонку, Google Home у режимі Bluetooth…)
- * і підлаштовується під позицію Chromecast.
+ * "Audio on phone": the video plays muted on the Chromecast while the phone plays the
+ * same track (headphones, a Bluetooth speaker, Google Home in Bluetooth mode…)
+ * and follows the Chromecast's position.
  *
- * Синхронізація: якщо телефон відстав або TV перемотали, перескакуємо трохи вперед
- * і чекаємо на паузі, поки TV наздожене; дрібну різницю вирівнюємо швидкістю ±5%.
+ * Sync: if the phone falls behind or the TV was seeked, jump slightly ahead and wait
+ * paused until the TV catches up; small drift is corrected with ±5% playback speed.
  */
 @androidx.annotation.OptIn(markerClass = [UnstableApi::class])
 object AudioRelay {
     private const val TICK_MS = 250L
-    private const val SEEK_LEAD_MS = 1_500L // запас на буферизацію після перемотування
+    private const val SEEK_LEAD_MS = 1_500L // buffering headroom after a seek
     private const val PREFS = "audio"
 
     private val main = Handler(Looper.getMainLooper())
@@ -52,7 +53,7 @@ object AudioRelay {
     private var lastCast: DetectedVideo? = null
     private var lastViaPhone = false
 
-    /** Компенсація затримки виводу (Bluetooth ~150–300 мс): телефон грає на стільки ж попереду. */
+    /** Output latency compensation (Bluetooth ~150–300 ms): the phone plays this much ahead. */
     @Volatile var delayMs = 200L
         private set
 
@@ -69,30 +70,29 @@ object AudioRelay {
         override fun onStatusUpdated() = sync()
     }
 
-    /** Chromecast почав нове відео: якщо звук був на телефоні, переводимо на нове відео. */
+    /** The Chromecast started a new video: if audio was on the phone, follow the new video. */
     fun onCastStarted(ctx: Context, v: DetectedVideo, viaPhone: Boolean) {
         lastCast = v
         lastViaPhone = viaPhone
         if (isActive) {
             stop(ctx, unmute = false)
-            start(ctx)?.let { toast(ctx, it) }
+            start(ctx)?.let { toast(ctx, ctx.getString(it)) }
         }
     }
 
-    /** null, якщо все добре, інакше текст помилки. */
-    fun start(ctx: Context): String? {
+    /** null on success, otherwise an error string resource. */
+    @StringRes
+    fun start(ctx: Context): Int? {
         if (isActive) return null
-        val v = lastCast ?: return "Спочатку запустіть відео на Chromecast"
-        val rmc = remoteClient(ctx) ?: return "Немає підключення до Chromecast"
-        if (rmc.mediaStatus == null) return "Спочатку запустіть відео на Chromecast"
-        if (v.duration == VideoProbe.LIVE || rmc.isLiveStream) {
-            return "Для прямих трансляцій звук на телефоні поки не підтримується"
-        }
+        val v = lastCast ?: return R.string.audio_cast_first
+        val rmc = remoteClient(ctx) ?: return R.string.audio_no_cast
+        if (rmc.mediaStatus == null) return R.string.audio_cast_first
+        if (v.duration == VideoProbe.LIVE || rmc.isLiveStream) return R.string.audio_live
         val appCtx = ctx.applicationContext
         app = appCtx
         delayMs = appCtx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getLong("delay_ms", 200)
 
-        // Той самий шлях, що й у проксі: заголовки сайту + SSH-тунель, якщо він увімкнений
+        // Same path as the proxy: site headers + the SSH tunnel when it is on
         val calls = object : Call.Factory {
             override fun newCall(request: Request): Call = StreamProxy.client().newCall(request)
         }
@@ -101,9 +101,9 @@ object AudioRelay {
             .setMediaSourceFactory(DefaultMediaSourceFactory(ds))
             .build()
         p.trackSelectionParameters = p.trackSelectionParameters.buildUpon()
-            .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, true) // лише звук
+            .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, true) // audio only
             .build()
-        // Без аудіофокусу: інакше телефон сам ставив би паузу, а TV грав далі
+        // No audio focus: otherwise the phone would pause on its own while the TV keeps playing
         p.setAudioAttributes(
             AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(),
             false,
@@ -111,7 +111,7 @@ object AudioRelay {
         p.setWakeMode(C.WAKE_MODE_NETWORK)
         p.addListener(object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
-                toast(appCtx, "Телефон не зміг відтворити звук: ${error.errorCodeName}. Звук знову на Chromecast")
+                toast(appCtx, appCtx.getString(R.string.audio_failed, error.errorCodeName))
                 stop(appCtx)
             }
         })
@@ -130,7 +130,7 @@ object AudioRelay {
         speed = 1f
         rmc.registerCallback(remoteCallback)
         rmc.setStreamMute(true)
-        ProxyService.start(appCtx) // щоб звук не зупинявся при вимкненому екрані
+        ProxyService.start(appCtx) // so the audio doesn't stop with the screen off
         main.post(tick)
         return null
     }
@@ -144,7 +144,7 @@ object AudioRelay {
             if (unmute) it.setStreamMute(false)
         }
         client = null
-        // Сервіс потрібен і самій трансляції через телефон, тоді його не чіпаємо
+        // Casting via phone needs the service too; leave it running then
         if (!lastViaPhone) ProxyService.stop(ctx.applicationContext)
     }
 
@@ -153,7 +153,7 @@ object AudioRelay {
         val rmc = client ?: return
         val ctx = app ?: return
         val connected = remoteClient(ctx) === rmc
-        if (!connected) { // трансляцію зупинили
+        if (!connected) { // casting was stopped
             stop(ctx, unmute = false)
             return
         }
@@ -161,21 +161,21 @@ object AudioRelay {
         val drift = p.currentPosition - target
 
         if (rmc.playerState != MediaStatus.PLAYER_STATE_PLAYING) {
-            // TV на паузі чи буферизується: чекаємо, але тримаємо позицію поруч
+            // TV paused or buffering: wait, but keep the position close
             p.playWhenReady = false
             if (abs(drift) > 1_000 && rmc.playerState == MediaStatus.PLAYER_STATE_PAUSED) p.seekTo(target.coerceAtLeast(0))
             return
         }
-        if (p.playbackState != Player.STATE_READY) return // телефон ще буферизується
+        if (p.playbackState != Player.STATE_READY) return // the phone is still buffering
 
         when {
-            // Сильно відстали або TV перемотали: стрибаємо вперед із запасом і чекаємо TV
+            // Far behind or the TV was seeked: jump ahead with headroom and wait for the TV
             drift < -1_500 || drift > 5_000 -> {
                 p.seekTo((target + SEEK_LEAD_MS).coerceAtLeast(0))
                 p.playWhenReady = false
                 setSpeed(p, 1f)
             }
-            drift > 300 -> p.playWhenReady = false // попереду: чекаємо, поки TV наздожене
+            drift > 300 -> p.playWhenReady = false // ahead: wait for the TV to catch up
             else -> {
                 p.playWhenReady = true
                 setSpeed(p, if (abs(drift) < 30) 1f else (1f - drift / 2_000f).coerceIn(0.95f, 1.05f))
@@ -201,10 +201,10 @@ object AudioRelay {
     fun toggle(activity: Activity) {
         if (isActive) {
             stop(activity)
-            toast(activity, "Звук знову на Chromecast")
+            toast(activity, activity.getString(R.string.audio_back_tv))
         } else {
             val err = start(activity)
-            toast(activity, err ?: "🎧 Звук на телефоні. Якщо не збігається з губами, підлаштуйте затримку в меню")
+            toast(activity, activity.getString(err ?: R.string.audio_on_phone))
         }
         activity.invalidateOptionsMenu()
     }
@@ -219,10 +219,10 @@ object AudioRelay {
             value = prefs.getLong("delay_ms", 200).coerceIn(0, 1_000).toFloat()
         }
         fun show(v: Float) {
-            label.text = "Звук на телефоні раніше на ${v.toInt()} мс\n(Bluetooth зазвичай 150–300 мс)"
+            label.text = activity.getString(R.string.audio_delay_label, v.toInt())
         }
         show(slider.value)
-        // Змінюємо одразу, щоб підганяти "на слух" під час перегляду
+        // Apply immediately so it can be tuned by ear while watching
         slider.addOnChangeListener { _, v, _ ->
             show(v)
             delayMs = v.toLong()
@@ -235,15 +235,15 @@ object AudioRelay {
             addView(slider)
         }
         MaterialAlertDialogBuilder(activity)
-            .setTitle("Затримка звуку")
+            .setTitle(R.string.audio_delay)
             .setView(box)
-            .setPositiveButton("Готово", null)
+            .setPositiveButton(R.string.done, null)
             .show()
     }
 
     /**
-     * Поки звук на телефоні, кнопки гучності керують телефоном, а не (заглушеним) Chromecast.
-     * Працює, коли FreeCaster на екрані.
+     * While audio is on the phone, the volume keys control the phone, not the (muted) Chromecast.
+     * Works while FreeCaster is on screen.
      */
     fun handleVolumeKey(ctx: Context, event: KeyEvent): Boolean {
         if (!isActive) return false

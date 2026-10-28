@@ -17,9 +17,9 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 /**
- * Маленький HTTP-сервер на телефоні. Chromecast качає відео через нього,
- * а телефон додає потрібні сайту заголовки (Referer, Cookie, User-Agent).
- * HLS-плейлисти переписуються, щоб і сегменти йшли через проксі.
+ * Small HTTP server on the phone. The Chromecast downloads the video through it,
+ * and the phone adds the headers the site needs (Referer, Cookie, User-Agent).
+ * HLS playlists are rewritten so segments go through the proxy too.
  */
 object StreamProxy {
     private var server: Server? = null
@@ -35,10 +35,10 @@ object StreamProxy {
     private const val MAX_RESUMES = 6
     @Volatile private var tunneled: Pair<Int, OkHttpClient>? = null
 
-    /** Завжди напряму, повз тунель (для оновлень додатка з GitHub). */
+    /** Always direct, bypassing the tunnel (used for app updates from GitHub). */
     val direct: OkHttpClient get() = http
 
-    /** Поки SSH-тунель увімкнено, усе йде лише через нього (kill switch). */
+    /** While the SSH tunnel is on, everything goes through it only (kill switch). */
     fun client(): OkHttpClient {
         val port = SshTunnel.socksPort ?: return http
         tunneled?.let { (p, c) -> if (p == port) return c }
@@ -64,7 +64,7 @@ object StreamProxy {
         server = null
     }
 
-    /** Повертає адресу виду http://192.168.x.x:port/p?... для Chromecast. */
+    /** Returns an address like http://192.168.x.x:port/p?... for the Chromecast. */
     fun proxify(phoneIp: String, target: String, headers: Map<String, String>): String {
         val port = ensureStarted()
         val id = Integer.toHexString(headers.hashCode())
@@ -95,7 +95,7 @@ object StreamProxy {
         return req.build()
     }
 
-    /** Віддає байти [pos]..[end]; при помилці читання відкриває потік заново з [pos]. */
+    /** Serves bytes [pos]..[end]; on a read error reopens the stream from [pos]. */
     private class ResumingStream(
         private var cur: InputStream?,
         private var pos: Long,
@@ -185,8 +185,8 @@ object StreamProxy {
         }
 
         /**
-         * Якщо з'єднання з сайтом обірвалось посеред відео (Wi-Fi, перепідключення
-         * SSH-тунелю), докачуємо з того самого байта через Range. Chromecast цього не помічає.
+         * If the connection to the site drops mid-video (Wi-Fi, SSH tunnel reconnect),
+         * resume from the same byte via Range. The Chromecast doesn't notice.
          */
         private fun resumable(
             resp: okhttp3.Response, first: InputStream, len: Long,

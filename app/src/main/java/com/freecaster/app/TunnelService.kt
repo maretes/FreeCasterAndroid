@@ -16,7 +16,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 
-/** Тримає SSH-тунель живим у фоні й перепідключає його при зміні мережі. */
+/** Keeps the SSH tunnel alive in the background and reconnects it when the network changes. */
 class TunnelService : Service() {
     private var cm: ConnectivityManager? = null
     private val statusListener: (SshTunnel.Status) -> Unit = { notifyStatus(it) }
@@ -36,7 +36,7 @@ class TunnelService : Service() {
     override fun onCreate() {
         super.onCreate()
         getSystemService(NotificationManager::class.java)?.createNotificationChannel(
-            NotificationChannel(CHANNEL, "SSH-тунель", NotificationManager.IMPORTANCE_LOW)
+            NotificationChannel(CHANNEL, getString(R.string.ssh_tunnel), NotificationManager.IMPORTANCE_LOW)
         )
         SshTunnel.addListener(statusListener)
         cm = getSystemService(ConnectivityManager::class.java)
@@ -52,7 +52,7 @@ class TunnelService : Service() {
         val type = if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0
         ServiceCompat.startForeground(this, NOTIFICATION_ID, build(SshTunnel.status), type)
 
-        // Система перезапустила процес: відновлюємо тунель, щоб kill switch не зник
+        // The system restarted the process: bring the tunnel back so the kill switch stays
         if (!SshTunnel.isEnabled && !(SshSettings.wasEnabled(this) && SshTunnel.start(this))) {
             stopSelf()
             return START_NOT_STICKY
@@ -80,18 +80,18 @@ class TunnelService : Service() {
         )
         return NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_tunnel)
-            .setContentTitle("SSH-тунель")
-            .setContentText(SshTunnel.describe(s))
+            .setContentTitle(getString(R.string.ssh_tunnel))
+            .setContentText(SshTunnel.describe(this, s))
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setContentIntent(open)
-            .addAction(0, "Відключити", stop)
+            .addAction(0, getString(R.string.disconnect), stop)
             .build()
     }
 
     companion object {
         private const val CHANNEL = "tunnel"
-        private const val NOTIFICATION_ID = 2 // 1 зайнятий ProxyService
+        private const val NOTIFICATION_ID = 2 // 1 is used by ProxyService
         private const val ACTION_STOP = "stop"
 
         fun start(context: Context) =

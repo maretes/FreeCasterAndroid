@@ -5,7 +5,7 @@ import android.net.ConnectivityManager
 import java.net.Inet4Address
 
 object NetUtils {
-    /** IP телефона в домашній мережі (його бачить Chromecast). */
+    /** The phone's IP on the home network (visible to the Chromecast). */
     fun localIpv4(context: Context): String? {
         val cm = context.getSystemService(ConnectivityManager::class.java) ?: return null
         val props = cm.getLinkProperties(cm.activeNetwork) ?: return null

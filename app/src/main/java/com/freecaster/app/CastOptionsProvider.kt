@@ -8,7 +8,7 @@ import com.google.android.gms.cast.framework.SessionProvider
 import com.google.android.gms.cast.framework.media.CastMediaOptions
 import com.google.android.gms.cast.framework.media.NotificationOptions
 
-/** Налаштування Google Cast: стандартний плеєр Chromecast (Default Media Receiver). */
+/** Google Cast options: the standard Chromecast player (Default Media Receiver). */
 class CastOptionsProvider : OptionsProvider {
     override fun getCastOptions(context: Context): CastOptions {
         val notification = NotificationOptions.Builder()

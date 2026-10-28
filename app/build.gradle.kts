@@ -11,13 +11,13 @@ android {
         applicationId = "com.freecaster.app"
         minSdk = 26
         targetSdk = 35
-        // Номер збірки GitHub Actions: по ньому додаток розуміє, що є оновлення
+        // GitHub Actions run number: this is how the app knows an update is available
         val build = (project.findProperty("buildNumber") as String?)?.toIntOrNull() ?: 1
         versionCode = build
         versionName = "0.1.$build"
     }
 
-    // Постійний ключ із секретів GitHub. Без нього оновлення не встановиться поверх старої версії
+    // Permanent key from GitHub secrets. Without it an update cannot be installed over the old version
     val keystore = System.getenv("KEYSTORE_PATH")
     signingConfigs {
         create("release") {
@@ -34,7 +34,7 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            // Без секрету підписуємо debug-ключем, щоб APK усе одно можна було встановити
+            // Without the secret, sign with the debug key so the APK can still be installed
             signingConfig = signingConfigs.getByName(if (keystore != null) "release" else "debug")
         }
     }

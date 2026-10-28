@@ -1,4 +1,5 @@
 <resources>
+    <!-- On Android 12+ the colors come from the wallpaper (Material You), see FreeCasterApp -->
     <style name="Theme.FreeCaster" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="colorPrimary">#3D6AF2</item>
         <item name="colorSecondary">#3D6AF2</item>

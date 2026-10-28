@@ -4,12 +4,12 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.util.concurrent.Executors
 
 /**
- * Визначає тривалість відео без завантаження файлу:
- * HLS: сума #EXTINF, DASH: mediaPresentationDuration, MP4/MOV: заголовок mvhd.
- * Запити йдуть тим самим клієнтом, що й проксі, тобто через SSH-тунель, якщо він увімкнений.
+ * Finds a video's duration without downloading the file:
+ * HLS: sum of #EXTINF, DASH: mediaPresentationDuration, MP4/MOV: the mvhd header.
+ * Requests use the same client as the proxy, i.e. through the SSH tunnel when it is on.
  */
 object VideoProbe {
-    /** Пряма трансляція: тривалості немає. */
+    /** Live stream: no duration. */
     const val LIVE = -1.0
 
     private val pool = Executors.newFixedThreadPool(3)
@@ -17,7 +17,7 @@ object VideoProbe {
     private val mpdDuration = Regex("mediaPresentationDuration=\"([^\"]+)\"")
     private val isoDuration = Regex("P(?:(\\d+)D)?T?(?:(\\d+)H)?(?:(\\d+)M)?(?:([\\d.]+)S)?")
 
-    /** [done] викликається з фонового потоку; null, якщо визначити не вдалося. */
+    /** [done] is called on a background thread; null if the duration is unknown. */
     fun probe(v: DetectedVideo, done: (Double?) -> Unit) {
         pool.execute {
             val d = try {
@@ -47,7 +47,7 @@ object VideoProbe {
         val txt = text(url, headers) ?: return null
         if (!txt.trimStart().startsWith("#EXTM3U")) return null
         if (txt.contains("#EXT-X-STREAM-INF")) {
-            // Головний плейлист: тривалість однакова в усіх якостях, беремо першу
+            // Master playlist: all variants have the same duration, take the first one
             if (depth > 0) return null
             val variant = txt.lineSequence().map { it.trim() }
                 .dropWhile { !it.startsWith("#EXT-X-STREAM-INF") }.drop(1)
@@ -69,14 +69,14 @@ object VideoProbe {
             (min.toDoubleOrNull() ?: 0.0) * 60 + (s.toDoubleOrNull() ?: 0.0)
     }
 
-    /** Йдемо по коробках верхнього рівня (ftyp, mdat, moov…) і читаємо mvhd усередині moov. */
+    /** Walk the top-level boxes (ftyp, mdat, moov…) and read mvhd inside moov. */
     private fun mp4(url: String, headers: Map<String, String>): Double? {
         var offset = 0L
         repeat(10) { i ->
             val head = range(url, headers, offset, 16) ?: return null
             if (head.size < 8) return null
             val type = String(head, 4, 4, Charsets.US_ASCII)
-            if (i == 0 && type != "ftyp") return null // не MP4
+            if (i == 0 && type != "ftyp") return null // not an MP4
             var size = u32(head, 0)
             var hdr = 8
             if (size == 1L) {
@@ -88,7 +88,7 @@ object VideoProbe {
                 val moov = range(url, headers, offset + hdr, 512) ?: return null
                 return mvhd(moov)
             }
-            if (size < 8) return null // 0 = до кінця файлу, moov там уже не буде
+            if (size < 8) return null // 0 = until end of file, so no moov after it
             offset += size
         }
         return null
@@ -108,7 +108,7 @@ object VideoProbe {
                     if (p + 28 > b.size) return null
                     u32(b, p + 20) to u32(b, p + 24)
                 }
-                // 0 буває у фрагментованих MP4: тривалість невідома
+                // 0 happens in fragmented MP4: duration unknown
                 return if (scale > 0 && dur > 0) dur.toDouble() / scale else null
             }
             if (size < 8) return null
@@ -117,7 +117,7 @@ object VideoProbe {
         return null
     }
 
-    /** Байти [from]..[from+len); null, якщо сервер не підтримує Range далі початку файлу. */
+    /** Bytes [from]..[from+len); null if the server ignores Range beyond the start of the file. */
     private fun range(url: String, headers: Map<String, String>, from: Long, len: Int): ByteArray? {
         val req = StreamProxy.request(url, headers, "bytes=$from-${from + len - 1}")
         StreamProxy.client().newCall(req).execute().use { r ->
