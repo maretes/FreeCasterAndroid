@@ -35,6 +35,9 @@ object StreamProxy {
     private const val MAX_RESUMES = 6
     @Volatile private var tunneled: Pair<Int, OkHttpClient>? = null
 
+    /** Завжди напряму, повз тунель (для оновлень додатка з GitHub). */
+    val direct: OkHttpClient get() = http
+
     /** Поки SSH-тунель увімкнено, усе йде лише через нього (kill switch). */
     fun client(): OkHttpClient {
         val port = SshTunnel.socksPort ?: return http

@@ -15,7 +15,7 @@ import java.io.IOException
 
 /**
  * Оновлення з GitHub Releases: кожна збірка в main публікується як реліз "build-N",
- * а N збігається з versionCode.
+ * а N збігається з versionCode. Завжди напряму, незалежно від SSH-тунелю.
  */
 object Updater {
     private const val LATEST = "https://api.github.com/repos/maretes/FreeCasterAndroid/releases/latest"
@@ -28,7 +28,7 @@ object Updater {
     /** Блокуючий виклик, не з головного потоку. */
     fun fetchLatest(): Release {
         val req = Request.Builder().url(LATEST).header("Accept", "application/vnd.github+json").build()
-        val json = StreamProxy.client().newCall(req).execute().use { r ->
+        val json = StreamProxy.direct.newCall(req).execute().use { r ->
             if (!r.isSuccessful) throw IOException("GitHub: HTTP ${r.code}")
             JSONObject(r.body?.string() ?: throw IOException("порожня відповідь"))
         }
@@ -59,7 +59,7 @@ object Updater {
         installer.openSession(id).use { session ->
             try {
                 val req = Request.Builder().url(rel.apkUrl).build()
-                StreamProxy.client().newCall(req).execute().use { r ->
+                StreamProxy.direct.newCall(req).execute().use { r ->
                     if (!r.isSuccessful) throw IOException("HTTP ${r.code}")
                     val body = r.body ?: throw IOException("порожня відповідь")
                     val total = body.contentLength().takeIf { it > 0 } ?: rel.size
