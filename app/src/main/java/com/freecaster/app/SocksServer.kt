@@ -10,6 +10,7 @@ import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 
 /** З'єднання з цільовим сайтом (у нас це канал усередині SSH). */
@@ -21,7 +22,10 @@ class Upstream(val input: InputStream, val output: OutputStream, private val onC
  * Локальний SOCKS-сервер на 127.0.0.1 (SOCKS5, а також SOCKS4/4a).
  * Кожне з'єднання передається в [open], тобто як у `ssh -D`.
  */
-class SocksServer(private val open: (host: String, port: Int) -> Upstream) {
+class SocksServer(
+    private val open: (host: String, port: Int) -> Upstream,
+    private val traffic: AtomicLong, // байти в обидва боки
+) {
     private val server = ServerSocket(0, 64, InetAddress.getByName("127.0.0.1"))
     private val pool = Executors.newCachedThreadPool()
 
@@ -75,7 +79,7 @@ class SocksServer(private val open: (host: String, port: Int) -> Upstream) {
                 val uplink = thread(name = "socks-up", isDaemon = true) {
                     try {
                         copy(inp, up.output)
-                    } catch (_: IOException) {
+                    } catch (_: Exception) {
                     } finally {
                         up.close()
                         runCatching { client.shutdownInput() }
@@ -83,12 +87,14 @@ class SocksServer(private val open: (host: String, port: Int) -> Upstream) {
                 }
                 try {
                     copy(up.input, out)
-                } catch (_: IOException) {
+                } catch (_: Exception) {
                 }
                 runCatching { client.close() }
                 uplink.join(1000)
             }
-        } catch (_: IOException) {
+        } catch (_: Exception) {
+            // Сюди ж потрапляє InterruptedException, коли тунель вимикають:
+            // будь-який виняток з потоку пулу інакше валить увесь додаток
         }
     }
 
@@ -158,6 +164,7 @@ class SocksServer(private val open: (host: String, port: Int) -> Upstream) {
             if (n < 0) return
             to.write(buf, 0, n)
             to.flush()
+            traffic.addAndGet(n.toLong())
         }
     }
 }

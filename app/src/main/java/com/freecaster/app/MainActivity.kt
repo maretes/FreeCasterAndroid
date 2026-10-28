@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.net.Uri
@@ -28,6 +29,8 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ImageView
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
@@ -54,7 +57,9 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var web: WebView
     private lateinit var toolbar: MaterialToolbar
-    private var tunnelItem: MenuItem? = null
+    private var tunnelIcon: ImageView? = null
+    private var tunnelTraffic: TextView? = null
+    private var lastTunnelState = SshTunnel.State.OFF
     private lateinit var address: EditText
     private lateinit var fab: ExtendedFloatingActionButton
     private lateinit var progress: LinearProgressIndicator
@@ -69,7 +74,14 @@ class MainActivity : AppCompatActivity() {
 
     private val prefs by lazy { getSharedPreferences("main", MODE_PRIVATE) }
 
-    private val tunnelListener: (SshTunnel.Status) -> Unit = { updateTunnelIcon() }
+    private val tunnelListener: (SshTunnel.Status) -> Unit = { st ->
+        // Помилку показуємо один раз, коли вона з'явилась
+        if (st.state == SshTunnel.State.ERROR && lastTunnelState != SshTunnel.State.ERROR) {
+            toast("SSH: ${SshTunnel.describe(st)}")
+        }
+        lastTunnelState = st.state
+        updateTunnelIcon()
+    }
     private val tunnelRefresh = Runnable { updateTunnelIcon() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -416,7 +428,16 @@ class MainActivity : AppCompatActivity() {
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.main_menu, menu)
         CastButtonFactory.setUpMediaRouteButton(applicationContext, menu, R.id.media_route_menu_item)
-        tunnelItem = menu.findItem(R.id.action_tunnel)
+        menu.findItem(R.id.action_tunnel)?.actionView?.let { v ->
+            tunnelIcon = v.findViewById(R.id.tunnel_icon)
+            tunnelTraffic = v.findViewById(R.id.tunnel_traffic)
+            v.setOnClickListener { onTunnelClick() }
+            // Довге натискання: стан, налаштування, "Повторити"
+            v.setOnLongClickListener {
+                if (SshSettings.load(this) == null) showSshSettings(connectAfter = true) else showTunnelStatus()
+                true
+            }
+        }
         updateTunnelIcon()
         return true
     }
@@ -434,7 +455,6 @@ class MainActivity : AppCompatActivity() {
             R.id.action_home -> web.loadUrl(HOME)
             R.id.action_remote -> startActivity(Intent(this, ExpandedControlsActivity::class.java))
             R.id.action_clear -> clearVideos()
-            R.id.action_tunnel -> onTunnelClick()
             R.id.action_ssh_settings -> showSshSettings(connectAfter = false)
             R.id.action_adblock -> {
                 adBlock = !adBlock
@@ -453,7 +473,10 @@ class MainActivity : AppCompatActivity() {
         when {
             SshSettings.load(this) == null -> showSshSettings(connectAfter = true)
             !SshTunnel.isEnabled -> connectTunnel()
-            else -> showTunnelStatus()
+            // Тут без підтвердження не можна: треба вирішити, чи довіряти новому ключу
+            SshTunnel.status.hostKeyChanged -> showTunnelStatus()
+            // Звичайний перемикач: вимикаємо одразу, без діалогу
+            else -> SshTunnel.stop(this) { web.reload() }
         }
     }
 
@@ -472,8 +495,10 @@ class MainActivity : AppCompatActivity() {
         val b = MaterialAlertDialogBuilder(this)
             .setTitle("SSH-тунель")
             .setMessage(msg)
-            .setNegativeButton("Відключити") { _, _ -> SshTunnel.stop(this) { web.reload() } }
             .setNeutralButton("Налаштування") { _, _ -> showSshSettings(connectAfter = false) }
+        if (SshTunnel.isEnabled) {
+            b.setNegativeButton("Відключити") { _, _ -> SshTunnel.stop(this) { web.reload() } }
+        }
         if (st.state == SshTunnel.State.ERROR) {
             b.setPositiveButton(if (st.hostKeyChanged) "Довіряти новому ключу" else "Повторити") { _, _ ->
                 if (st.hostKeyChanged) SshSettings.forgetHostKey(this)
@@ -523,7 +548,7 @@ class MainActivity : AppCompatActivity() {
      * жовта: підключаємось; червона: помилка або сервер недоступний понад хвилину.
      */
     private fun updateTunnelIcon() {
-        val item = tunnelItem ?: return
+        val icon = tunnelIcon ?: return
         val st = SshTunnel.status
         val elapsed = SystemClock.elapsedRealtime() - st.since
         val colorRes = when (st.state) {
@@ -539,11 +564,23 @@ class MainActivity : AppCompatActivity() {
         }
         val color = colorRes?.let { ContextCompat.getColor(this, it) }
             ?: MaterialColors.getColor(toolbar, com.google.android.material.R.attr.colorOnSurfaceVariant)
-        item.icon = ContextCompat.getDrawable(this, R.drawable.ic_tunnel)?.mutate()?.apply { setTint(color) }
+        icon.imageTintList = ColorStateList.valueOf(color)
+        tunnelTraffic?.apply {
+            visibility = if (SshTunnel.isEnabled) View.VISIBLE else View.GONE
+            text = formatBytes(SshTunnel.trafficBytes)
+        }
 
+        // Поки тунель увімкнено, щосекунди оновлюємо лічильник і колір
         toolbar.removeCallbacks(tunnelRefresh)
-        if (st.state == SshTunnel.State.CONNECTING || st.state == SshTunnel.State.RECONNECTING) {
-            toolbar.postDelayed(tunnelRefresh, 2_000)
+        if (SshTunnel.isEnabled) toolbar.postDelayed(tunnelRefresh, 1_000)
+    }
+
+    private fun formatBytes(b: Long): String {
+        val mb = b / (1024.0 * 1024.0)
+        return when {
+            mb >= 1024 -> String.format(java.util.Locale.US, "%.1f GB", mb / 1024)
+            mb >= 100 -> "${mb.toLong()} MB"
+            else -> String.format(java.util.Locale.US, "%.1f MB", mb)
         }
     }
 

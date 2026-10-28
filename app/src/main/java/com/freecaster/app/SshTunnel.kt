@@ -20,6 +20,7 @@ import java.net.ConnectException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.util.concurrent.CopyOnWriteArraySet
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 
 /**
@@ -57,11 +58,15 @@ object SshTunnel {
     @Volatile private var socks: SocksServer? = null
     @Volatile private var kick = false
     @Volatile private var host = ""
+    private val traffic = AtomicLong()
 
     val isEnabled: Boolean get() = enabled
 
     /** Порт локального SOCKS, поки тунель увімкнено (навіть під час перепідключення). */
     val socksPort: Int? get() = if (enabled) socks?.port else null
+
+    /** Скільки байтів пройшло через тунель з моменту увімкнення. */
+    val trafficBytes: Long get() = traffic.get()
 
     fun addListener(l: (Status) -> Unit) = listeners.add(l)
     fun removeListener(l: (Status) -> Unit) = listeners.remove(l)
@@ -77,11 +82,12 @@ object SshTunnel {
         }
         val cfg = SshSettings.load(app) ?: return false
         val srv = try {
-            SocksServer(::openUpstream).also { it.start() }
+            SocksServer(::openUpstream, traffic).also { it.start() }
         } catch (e: IOException) {
             return false
         }
         socks = srv
+        traffic.set(0)
         enabled = true
         SshSettings.setEnabled(app, true)
         setStatus(Status(State.CONNECTING))

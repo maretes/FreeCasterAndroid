@@ -10,6 +10,7 @@
         android:id="@+id/action_tunnel"
         android:icon="@drawable/ic_tunnel"
         android:title="SSH-тунель"
+        app:actionLayout="@layout/action_tunnel"
         app:showAsAction="always" />
     <item android:id="@+id/action_back" android:title="Назад" app:showAsAction="never" />
     <item android:id="@+id/action_forward" android:title="Вперед" app:showAsAction="never" />

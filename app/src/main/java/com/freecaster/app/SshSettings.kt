@@ -49,7 +49,11 @@ object SshSettings {
     /** Чи був тунель увімкнений (щоб після перезапуску процесу kill switch не вимкнувся). */
     fun wasEnabled(ctx: Context) = prefs(ctx).getBoolean("enabled", false)
 
-    fun setEnabled(ctx: Context, on: Boolean) = prefs(ctx).edit().putBoolean("enabled", on).apply()
+    // commit(), а не apply(): прапорець має бути на диску ще до того, як щось піде не так,
+    // інакше після перезапуску тунель увімкнеться сам
+    fun setEnabled(ctx: Context, on: Boolean) {
+        prefs(ctx).edit().putBoolean("enabled", on).commit()
+    }
 
     /**
      * Приймає і просто "host", і "user@host:port", і цілу команду
