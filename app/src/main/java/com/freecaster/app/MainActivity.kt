@@ -66,6 +66,8 @@ class MainActivity : AppCompatActivity() {
     private var castContext: CastContext? = null
 
     private val videos = LinkedHashMap<String, DetectedVideo>()
+    private val probed = HashSet<String>()
+    private var pageGen = 0 // щоб результати перевірки старої сторінки не потрапили в нову
     @Volatile private var adBlock = true
     @Volatile private var userAgent = ""
 
@@ -277,11 +279,16 @@ class MainActivity : AppCompatActivity() {
 
     private inner class Bridge {
         @JavascriptInterface
-        fun onVideo(src: String, page: String) {
+        fun onVideo(src: String, page: String, duration: Double) {
             if (!src.startsWith("http")) return
             val kind = VideoDetector.classify(src) ?: VideoKind.OTHER
             val headers = buildHeaders(src, mapOf("Referer" to page))
-            runOnUiThread { addVideo(DetectedVideo(src, kind, headers)) }
+            val d = when {
+                duration > 0 -> duration
+                duration == -1.0 -> VideoProbe.LIVE
+                else -> null
+            }
+            runOnUiThread { addVideo(DetectedVideo(src, kind, headers, d)) }
         }
     }
 
@@ -312,35 +319,80 @@ class MainActivity : AppCompatActivity() {
 
     private fun addVideo(v: DetectedVideo) {
         val existing = videos[v.url]
-        if (existing != null && existing.kind != VideoKind.OTHER) return
         if (existing == null && videos.size >= 60) return
-        videos[v.url] = v
+        val merged = if (existing == null) v else existing.copy(
+            kind = if (existing.kind == VideoKind.OTHER) v.kind else existing.kind,
+            duration = v.duration ?: existing.duration,
+        )
+        if (merged == existing) return
+        videos[v.url] = merged
+        updateFab()
+        if (merged.duration == null && probed.add(v.url)) {
+            val gen = pageGen
+            VideoProbe.probe(merged) { d ->
+                if (d != null) runOnUiThread { if (gen == pageGen) setDuration(v.url, d) }
+            }
+        }
+    }
+
+    private fun setDuration(url: String, d: Double) {
+        val v = videos[url] ?: return
+        if (v.duration != null) return
+        videos[url] = v.copy(duration = d)
         updateFab()
     }
 
     private fun clearVideos() {
+        pageGen++
         videos.clear()
+        probed.clear()
         updateFab()
     }
 
     private fun updateFab() {
+        val main = videos.values.count { !it.isShort }
         fab.visibility = if (videos.isEmpty()) View.GONE else View.VISIBLE
-        fab.text = "Відео: ${videos.size}"
+        fab.text = if (main > 0) "Відео: $main" else "Короткі: ${videos.size}"
     }
 
-    private fun showVideoList() {
-        // HLS та MP4 вгору: зазвичай це саме те, що треба
-        val list = videos.values.sortedBy { it.kind.ordinal }
+    private fun formatDuration(d: Double?): String? {
+        if (d == null) return null
+        if (d == VideoProbe.LIVE) return "LIVE"
+        val t = d.toLong()
+        val h = t / 3600
+        val m = t % 3600 / 60
+        val s = t % 60
+        return if (h > 0) String.format(java.util.Locale.US, "%d:%02d:%02d", h, m, s)
+        else String.format(java.util.Locale.US, "%d:%02d", m, s)
+    }
+
+    private fun showVideoList(showShort: Boolean = false) {
+        // Пряма трансляція і найдовші відео вгору (зазвичай це саме те, що треба),
+        // потім невідомої тривалості за типом: HLS, MP4…
+        val all = videos.values.sortedWith(
+            compareByDescending<DetectedVideo> { v ->
+                val d = v.duration ?: -2.0
+                if (d == VideoProbe.LIVE) Double.MAX_VALUE else d
+            }.thenBy { it.kind.ordinal }
+        )
+        val shortCount = all.count { it.isShort }
+        val list = if (showShort) all else all.filter { !it.isShort }
+        if (list.isEmpty() && !showShort) return showVideoList(showShort = true)
         val labels = list.map { v ->
             val u = Uri.parse(v.url)
             val name = u.lastPathSegment?.take(50) ?: v.url.take(50)
-            "${v.kind.label} · ${u.host}\n$name"
+            val info = listOfNotNull(v.kind.label, formatDuration(v.duration), u.host).joinToString(" · ")
+            "$info\n$name"
         }.toTypedArray()
-        MaterialAlertDialogBuilder(this)
+        val b = MaterialAlertDialogBuilder(this)
             .setTitle("Знайдені відео")
             .setItems(labels) { _, i -> showVideoActions(list[i]) }
             .setNegativeButton("Закрити", null)
-            .show()
+        // Короткі (менше хвилини) зазвичай реклама, ховаємо їх
+        if (!showShort && shortCount > 0) {
+            b.setNeutralButton("Короткі ($shortCount)") { _, _ -> showVideoList(showShort = true) }
+        }
+        b.show()
     }
 
     private fun showVideoActions(v: DetectedVideo) {

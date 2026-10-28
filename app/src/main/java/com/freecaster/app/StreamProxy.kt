@@ -36,7 +36,7 @@ object StreamProxy {
     @Volatile private var tunneled: Pair<Int, OkHttpClient>? = null
 
     /** Поки SSH-тунель увімкнено, усе йде лише через нього (kill switch). */
-    private fun client(): OkHttpClient {
+    fun client(): OkHttpClient {
         val port = SshTunnel.socksPort ?: return http
         tunneled?.let { (p, c) -> if (p == port) return c }
         val c = http.newBuilder()
@@ -85,7 +85,7 @@ object StreamProxy {
         }
     }
 
-    private fun request(target: String, headers: Map<String, String>, range: String?): Request {
+    fun request(target: String, headers: Map<String, String>, range: String?): Request {
         val req = Request.Builder().url(target)
         headers.forEach { (k, v) -> req.header(k, v) }
         range?.let { req.header("Range", it) }

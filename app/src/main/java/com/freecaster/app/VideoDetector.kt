@@ -18,7 +18,12 @@ data class DetectedVideo(
     val kind: VideoKind,
     /** Заголовки, з якими браузер запитував відео (Referer, Cookie, User-Agent...). */
     val headers: Map<String, String>,
-)
+    /** Секунди; [VideoProbe.LIVE] для прямих трансляцій; null, поки невідомо. */
+    val duration: Double? = null,
+) {
+    /** Коротше хвилини: найчастіше реклама чи промо. */
+    val isShort: Boolean get() = duration != null && duration >= 0 && duration < 60
+}
 
 object VideoDetector {
     /** Визначає за адресою, чи це відео. Сегменти (.ts / .m4s) ігноруємо. */
@@ -45,13 +50,21 @@ object VideoDetector {
     const val SCAN_JS = """
 (function(){
   if (window.__freeCaster) return; window.__freeCaster = 1;
-  function report(s){
-    if (s && s.indexOf('http') === 0) { try { CasterBridge.onVideo(s, location.href); } catch(e){} }
+  function report(s, d){
+    if (s && s.indexOf('http') === 0) { try { CasterBridge.onVideo(s, location.href, d); } catch(e){} }
+  }
+  // Тривалість: секунди, -1 пряма трансляція, -2 ще невідомо
+  function dur(v){
+    var d = v && v.duration;
+    if (d === Infinity) return -1;
+    return (typeof d === 'number' && isFinite(d) && d > 0) ? d : -2;
   }
   function scan(){
     try {
-      document.querySelectorAll('video, video source, audio').forEach(function(v){
-        report(v.currentSrc || v.src);
+      document.querySelectorAll('video, audio').forEach(function(v){
+        var d = dur(v);
+        report(v.currentSrc || v.src, d);
+        v.querySelectorAll('source').forEach(function(s){ report(s.src, d); });
       });
     } catch(e){}
   }
