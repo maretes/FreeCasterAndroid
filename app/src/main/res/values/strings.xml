@@ -120,11 +120,12 @@
     <string name="action_dlna">Play on a TV (DLNA: Samsung, LG, Sony…)</string>
     <string name="dlna_title">TVs on this network</string>
     <string name="dlna_searching">Looking for TVs… The TV must be on and on the same Wi-Fi</string>
-    <string name="dlna_none">No TVs found. Check that the TV is on the same Wi-Fi; on some TVs media sharing (DLNA) has to be turned on in the settings</string>
     <string name="dlna_sending">Sending to %s…</string>
     <string name="dlna_failed">The TV didn\'t accept the video: %s</string>
     <string name="dlna_hls_note">Not every TV plays HLS (.m3u8). If it doesn\'t start, pick an MP4 version of the video</string>
     <string name="menu_dlna_remote">TV remote (DLNA)</string>
     <string name="volume_value">Volume: %d</string>
     <string name="stop_playback">Stop</string>
+    <string name="dlna_blocked">No device on this Wi-Fi answered at all. The router may be blocking device discovery (guest network or “client/AP isolation”), or the phone isn\'t on Wi-Fi.</string>
+    <string name="dlna_none_n">%d devices on the network answered, but none of them is a TV that accepts video. Check that the TV is connected to this same Wi-Fi (Settings → Network on the TV). A TV showing a “Wireless Display” / screen mirroring screen is waiting for Miracast and usually isn\'t visible this way.</string>
 </resources>

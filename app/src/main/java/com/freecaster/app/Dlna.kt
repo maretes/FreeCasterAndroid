@@ -11,6 +11,7 @@ import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.SocketTimeoutException
 import java.net.URL
 
@@ -33,8 +34,12 @@ object Dlna {
     private const val RC = "urn:schemas-upnp-org:service:RenderingControl:1"
     private val xml = "text/xml; charset=\"utf-8\"".toMediaType()
 
-    /** Blocking. Calls [onFound] for every new renderer during [timeoutMs]. */
-    fun discover(ctx: Context, timeoutMs: Int = 4_000, onFound: (DlnaDevice) -> Unit) {
+    /**
+     * Blocking. Calls [onFound] for every new renderer during [timeoutMs].
+     * Returns how many devices answered at all (routers, NAS…): 0 means the network
+     * blocks discovery (client isolation, guest Wi-Fi), not that there are no TVs.
+     */
+    fun discover(ctx: Context, timeoutMs: Int = 6_000, onFound: (DlnaDevice) -> Unit): Int {
         val wifi = ctx.applicationContext.getSystemService(WifiManager::class.java)
         // Some phones drop SSDP traffic unless a multicast lock is held
         val lock = wifi?.createMulticastLock("FreeCaster:ssdp")?.apply {
@@ -42,25 +47,41 @@ object Dlna {
             acquire()
         }
         val seen = HashSet<String>()
+        val responders = HashSet<String>()
         try {
-            DatagramSocket().use { sock ->
+            openSocket(ctx).use { sock ->
                 sock.soTimeout = 500
                 val group = InetAddress.getByName("239.255.255.250")
-                for (st in listOf("urn:schemas-upnp-org:device:MediaRenderer:1", AVT)) {
-                    val msg = "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\n" +
-                        "MAN: \"ssdp:discover\"\r\nMX: 2\r\nST: $st\r\n\r\n"
-                    val data = msg.toByteArray(Charsets.US_ASCII)
-                    repeat(2) { sock.send(DatagramPacket(data, data.size, group, 1900)) }
+                // Some TVs only answer generic searches, so ask for everything and filter by description
+                val targets = listOf(
+                    "urn:schemas-upnp-org:device:MediaRenderer:1", AVT, "upnp:rootdevice", "ssdp:all",
+                )
+                fun search() {
+                    for (st in targets) {
+                        val msg = "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\n" +
+                            "MAN: \"ssdp:discover\"\r\nMX: 3\r\nST: $st\r\n\r\n"
+                        val data = msg.toByteArray(Charsets.US_ASCII)
+                        runCatching { sock.send(DatagramPacket(data, data.size, group, 1900)) }
+                    }
                 }
-                val deadline = System.currentTimeMillis() + timeoutMs
+                search()
+                var resent = false
+                val start = System.currentTimeMillis()
+                val deadline = start + timeoutMs
                 val buf = ByteArray(4096)
                 while (System.currentTimeMillis() < deadline) {
+                    // UDP gets lost on busy Wi-Fi: ask once more halfway
+                    if (!resent && System.currentTimeMillis() - start > timeoutMs / 3) {
+                        resent = true
+                        search()
+                    }
                     val pkt = DatagramPacket(buf, buf.size)
                     try {
                         sock.receive(pkt)
                     } catch (e: SocketTimeoutException) {
                         continue
                     }
+                    pkt.address?.hostAddress?.let { responders += it }
                     val text = String(pkt.data, 0, pkt.length, Charsets.UTF_8)
                     val location = text.lineSequence()
                         .firstOrNull { it.startsWith("LOCATION:", ignoreCase = true) }
@@ -74,6 +95,17 @@ object Dlna {
             }
         } finally {
             lock?.release()
+        }
+        return responders.size
+    }
+
+    /** Bound to the Wi-Fi address so the search never goes out over mobile data or a VPN. */
+    private fun openSocket(ctx: Context): DatagramSocket {
+        val ip = NetUtils.localIpv4(ctx) ?: return DatagramSocket()
+        return try {
+            DatagramSocket(InetSocketAddress(InetAddress.getByName(ip), 0))
+        } catch (e: Exception) {
+            DatagramSocket()
         }
     }
 

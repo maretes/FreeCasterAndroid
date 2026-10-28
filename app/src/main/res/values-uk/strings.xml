@@ -118,11 +118,12 @@
     <string name="action_dlna">На телевізор (DLNA: Samsung, LG, Sony…)</string>
     <string name="dlna_title">Телевізори в мережі</string>
     <string name="dlna_searching">Шукаю телевізори… Телевізор має бути увімкнений і в тій самій Wi-Fi</string>
-    <string name="dlna_none">Телевізорів не знайдено. Перевірте, що ТВ у тій самій Wi-Fi; на деяких ТВ треба увімкнути спільний доступ до медіа (DLNA) в налаштуваннях</string>
     <string name="dlna_sending">Надсилаю на %s…</string>
     <string name="dlna_failed">Телевізор не прийняв відео: %s</string>
     <string name="dlna_hls_note">Не кожен телевізор відтворює HLS (.m3u8). Якщо не запускається, виберіть MP4-варіант відео</string>
     <string name="menu_dlna_remote">Пульт телевізора (DLNA)</string>
     <string name="volume_value">Гучність: %d</string>
     <string name="stop_playback">Зупинити</string>
+    <string name="dlna_blocked">Жоден пристрій у цій Wi-Fi не відповів. Можливо, роутер блокує пошук пристроїв (гостьова мережа або «ізоляція клієнтів/AP»), або телефон не в Wi-Fi.</string>
+    <string name="dlna_none_n">Відповіли пристроїв у мережі: %d, але серед них немає телевізора, що приймає відео. Перевірте, що ТВ підключений до цієї ж Wi-Fi (Налаштування → Мережа на ТВ). Телевізор на екрані «Wireless Display» / дзеркалення чекає на Miracast і зазвичай так не видно.</string>
 </resources>
