@@ -20,7 +20,7 @@
     <item android:id="@+id/action_audio_phone" android:title="@string/menu_audio_phone" android:checkable="true" app:showAsAction="never" />
     <item android:id="@+id/action_audio_delay" android:title="@string/menu_audio_delay" app:showAsAction="never" />
     <item android:id="@+id/action_adblock" android:title="@string/menu_adblock" android:checkable="true" app:showAsAction="never" />
-    <item android:id="@+id/action_ssh_settings" android:title="@string/menu_ssh_settings" app:showAsAction="never" />
+    <item android:id="@+id/action_ssh_settings" android:title="@string/menu_connection" app:showAsAction="never" />
     <item android:id="@+id/action_update" android:title="@string/menu_update" app:showAsAction="never" />
     <item android:id="@+id/action_language" android:title="@string/menu_language" app:showAsAction="never" />
     <item android:id="@+id/action_about" android:title="@string/menu_about" app:showAsAction="never" />

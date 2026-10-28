@@ -10,7 +10,7 @@ The app is in English by default; Ukrainian can be picked in menu → **Language
 - **Cast via phone**: if a site refuses to serve the video to the TV, the phone relays it with the required headers (Referer, Cookie). A notification keeps it running with the screen off
 - Remote: pause, seek, volume, plus a mini player and notification controls
 - **Phone audio**: video on the TV, sound on the phone's headphones / Bluetooth speaker
-- Built-in **SSH tunnel** (like `ssh -D`) for the in-app browser, with a kill switch
+- Built-in **SSH tunnel** (like `ssh -D`) or a **public proxy** from a list for the in-app browser, with a kill switch
 - Ad and pop-up blocking (toggle in the menu)
 - "Share → FreeCaster" from any app
 - In-app updates from GitHub Releases
@@ -29,7 +29,7 @@ The app is in English by default; Ukrainian can be picked in menu → **Language
 5. If the TV can't play it, the app automatically retries via the phone.
 
 ## SSH tunnel (like `ssh -D 1080`)
-1. Menu → **SSH settings**: host, port, user, password → **Save**.
+1. Menu → **Connection settings** → **SSH server**: host, port, user, password → **Save**.
    The host field also accepts `user@host` or a whole `ssh ... user@host` command.
 2. The key button at the top toggles the tunnel with one tap: grey = off, yellow = connecting, green = connected, red = error.
    The traffic sent through the tunnel is shown under it. Long-press for status and settings.
@@ -37,6 +37,14 @@ The app is in English by default; Ukrainian can be picked in menu → **Language
    and casting automatically goes through the phone so the TV traffic is tunneled too.
 4. If the connection drops, the app silently reconnects in the background, and video on the Chromecast resumes from where it stopped.
 5. App updates always go directly, regardless of the tunnel.
+
+## Public proxy instead of SSH
+Menu → **Connection settings** → **Public proxy from a list**. Pick a country (🇺🇦 UA by default) and a proxy;
+the list comes from [proxyscrape.com](https://proxyscrape.com/free-proxy-list) and shows protocol (HTTP / SOCKS4 / SOCKS5),
+city, ping, uptime and anonymity, fastest first. Only live proxies that can carry HTTPS are listed.
+Everything else works the same as with SSH: the key button, the kill switch, the traffic counter and casting via the phone.
+The app checks the proxy every 30 s and switches to the next one from the list if it stops responding.
+Public proxies are run by strangers: they can see which sites you open (HTTPS content stays encrypted), so don't sign in to important accounts through them.
 
 ## Phone audio
 While casting: menu (or the remote's menu) → **🎧 Audio on phone**.
@@ -56,7 +64,7 @@ Tap the toggle again to send the sound back to the Chromecast. Live streams are 
 - Ad domain list: `AdBlocker.kt`
 - Video detection: `VideoDetector.kt`, duration probing: `VideoProbe.kt`
 - Proxy for the TV: `StreamProxy.kt`
-- SSH tunnel: `SshTunnel.kt`, `SocksServer.kt`
+- SSH tunnel and public proxies: `SshTunnel.kt`, `SocksServer.kt`, `PublicProxies.kt`
 - Phone audio: `AudioRelay.kt`
 - Updates: `Updater.kt`
 

@@ -25,8 +25,8 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 
 /**
- * SSH tunnel for the browser, like `ssh -D`: a local SOCKS server whose
- * connections go through SSH as direct-tcpip channels.
+ * Tunnel for the browser: a local SOCKS server whose connections go either through
+ * SSH as direct-tcpip channels (like `ssh -D`) or through a public proxy from a list.
  *
  * Kill switch: while the tunnel is on, the WebView and StreamProxy only go through
  * SOCKS. If SSH drops, new connections wait for the reconnect (up to [WAIT_MS])
@@ -59,6 +59,9 @@ object SshTunnel {
     @Volatile private var socks: SocksServer? = null
     @Volatile private var kick = false
     @Volatile private var host = ""
+    /** Public proxy mode: the proxy in use, and whether its last health check passed. */
+    @Volatile private var proxy: PublicProxy? = null
+    @Volatile private var proxyUp = false
     private val traffic = AtomicLong()
 
     val isEnabled: Boolean get() = enabled
@@ -81,7 +84,7 @@ object SshTunnel {
             onReady?.let { main.post(it) }
             return true
         }
-        val cfg = SshSettings.load(app) ?: return false
+        if (!ConnectionSettings.isConfigured(app)) return false
         val srv = try {
             SocksServer(::openUpstream, traffic).also { it.start() }
         } catch (e: IOException) {
@@ -93,7 +96,10 @@ object SshTunnel {
         SshSettings.setEnabled(app, true)
         setStatus(Status(State.CONNECTING))
         applyWebViewProxy(app, srv.port, onReady)
-        launchWorker(cfg, SshSettings.knownHosts(app))
+        if (!launchWorker(app)) {
+            stop(app)
+            return false
+        }
         TunnelService.start(app)
         return true
     }
@@ -110,6 +116,7 @@ object SshTunnel {
         generation++
         synchronized(lock) { lock.notifyAll() }
         dropSession()
+        proxyUp = false
         socks?.close()
         socks = null
         val exec = ContextCompat.getMainExecutor(app)
@@ -123,12 +130,13 @@ object SshTunnel {
     fun restart(ctx: Context) {
         if (!enabled) return
         val app = ctx.applicationContext
-        val cfg = SshSettings.load(app) ?: return
+        if (!ConnectionSettings.isConfigured(app)) return
         generation++
         synchronized(lock) { lock.notifyAll() }
         dropSession()
+        proxyUp = false
         setStatus(Status(State.CONNECTING))
-        launchWorker(cfg, SshSettings.knownHosts(app))
+        launchWorker(app)
     }
 
     /** The "Retry" button after an error. */
@@ -141,7 +149,7 @@ object SshTunnel {
     fun onNetworkChanged(changed: Boolean) {
         if (!enabled) return
         // A network change kills a live session; a network appearing during backoff retries at once
-        if (changed || session == null) kick = true
+        if (changed || session == null || proxy != null) kick = true
         synchronized(lock) { lock.notifyAll() }
     }
 
@@ -154,11 +162,73 @@ object SshTunnel {
         thread(isDaemon = true) { s.disconnect() }
     }
 
-    private fun launchWorker(cfg: SshConfig, knownHosts: File) {
+    private fun launchWorker(app: Context): Boolean {
         val gen = generation
-        host = cfg.host
         kick = false
-        thread(name = "ssh-tunnel", isDaemon = true) { work(gen, cfg, knownHosts) }
+        if (ConnectionSettings.mode(app) == ConnectionSettings.Mode.PROXY) {
+            val p = ConnectionSettings.proxy(app) ?: return false
+            proxy = p
+            proxyUp = false
+            host = p.label
+            thread(name = "proxy-tunnel", isDaemon = true) { workProxy(gen, p, app) }
+        } else {
+            val cfg = SshSettings.load(app) ?: return false
+            proxy = null
+            host = cfg.host
+            thread(name = "ssh-tunnel", isDaemon = true) { work(gen, cfg, SshSettings.knownHosts(app)) }
+        }
+        return true
+    }
+
+    /**
+     * Public proxy: check every 30 s that it can reach the internet. After 3 failed checks in a row
+     * switch to the next proxy from the last fetched list, so a dead free proxy is barely noticed.
+     */
+    private fun workProxy(gen: Int, first: PublicProxy, app: Context) {
+        var p = first
+        var fails = 0
+        var attempt = 0
+        var connectedOnce = false
+        val spares = PublicProxies.cached.filter { it != first }.toMutableList()
+        while (alive(gen)) {
+            val ok = try {
+                PublicProxies.dial(p, "www.google.com", 443).close()
+                true
+            } catch (e: Exception) {
+                false
+            }
+            if (!alive(gen)) return
+            if (ok) {
+                synchronized(lock) {
+                    proxyUp = true
+                    lock.notifyAll()
+                }
+                fails = 0
+                attempt = 0
+                connectedOnce = true
+                setStatus(Status(State.CONNECTED), gen)
+                val until = SystemClock.elapsedRealtime() + 30_000
+                waitWhile { alive(gen) && !kick && SystemClock.elapsedRealtime() < until }
+                kick = false
+                continue
+            }
+            proxyUp = false
+            fails++
+            if (fails >= 3 && spares.isNotEmpty()) {
+                p = spares.removeAt(0)
+                ConnectionSettings.setProxy(app, p)
+                proxy = p
+                host = p.label
+                fails = 0
+                continue // try the new one right away
+            }
+            setStatus(keepSince(if (connectedOnce) State.RECONNECTING else State.CONNECTING, R.string.err_proxy_dead), gen)
+            val delay = BACKOFF[attempt.coerceAtMost(BACKOFF.size - 1)].coerceAtLeast(1_000)
+            attempt++
+            val until = SystemClock.elapsedRealtime() + delay
+            waitWhile { alive(gen) && !kick && SystemClock.elapsedRealtime() < until }
+            kick = false
+        }
     }
 
     private fun alive(gen: Int) = enabled && gen == generation
@@ -291,7 +361,32 @@ object SshTunnel {
         }
     }
 
-    private fun openUpstream(host: String, port: Int): Upstream {
+    private fun openUpstream(host: String, port: Int): Upstream =
+        if (proxy != null) openViaProxy(host, port) else openViaSsh(host, port)
+
+    /** Waits (kill switch) while the proxy is being checked or replaced, then dials through it. */
+    private fun openViaProxy(host: String, port: Int): Upstream {
+        val deadline = SystemClock.elapsedRealtime() + WAIT_MS
+        synchronized(lock) {
+            while (!proxyUp) {
+                if (!enabled) throw IOException("tunnel is off")
+                val left = deadline - SystemClock.elapsedRealtime()
+                if (left <= 0) throw IOException("proxy unavailable")
+                lock.wait(left)
+            }
+        }
+        val p = proxy ?: throw IOException("tunnel is off")
+        return try {
+            PublicProxies.dial(p, host, port)
+        } catch (e: IOException) {
+            // Maybe the proxy just died: let the worker re-check it now instead of in 30 s
+            kick = true
+            synchronized(lock) { lock.notifyAll() }
+            throw e
+        }
+    }
+
+    private fun openViaSsh(host: String, port: Int): Upstream {
         val deadline = SystemClock.elapsedRealtime() + WAIT_MS
         while (true) {
             val s = awaitSession(deadline) ?: throw IOException("SSH tunnel unavailable")

@@ -93,4 +93,24 @@
     <string name="about_text">Збірка %1$d\n\nПідтримка проєкту, питання й помилки:\n%2$s</string>
     <string name="write_email">Написати</string>
     <string name="copy">Копіювати</string>
+    <string name="menu_connection">Налаштування підключення</string>
+    <string name="choose_connection">Як підключатися?</string>
+    <string name="conn_ssh">SSH-сервер (власний)</string>
+    <string name="conn_proxy">Публічний проксі зі списку</string>
+    <string name="proxy_list_title">Публічні проксі</string>
+    <string name="proxy_load_failed">Не вдалося завантажити список: %s</string>
+    <string name="proxy_empty">Зараз немає робочих проксі для цієї країни</string>
+    <string name="proxy_all">Усі</string>
+    <string name="proxy_meta">%1$s · %2$s · аптайм %3$d%%</string>
+    <string name="proxy_ms">%d мс</string>
+    <string name="anon_transparent">прозорий</string>
+    <string name="anon_anonymous">анонімний</string>
+    <string name="anon_elite">елітний</string>
+    <string name="proxy_warning_title">Про публічні проксі</string>
+    <string name="proxy_warning">Публічні проксі тримають невідомі люди. Вони часто повільні, раптово перестають працювати й бачать, які сайти ви відкриваєте. Вміст HTTPS-сторінок лишається зашифрованим. Не входьте через них у важливі акаунти.</string>
+    <string name="got_it">Зрозуміло</string>
+    <string name="err_proxy_dead">Проксі не відповідає</string>
+    <string name="refresh">Оновити</string>
+    <string name="change_proxy">Змінити проксі</string>
+    <string name="proxy_selected">Проксі: %s</string>
 </resources>

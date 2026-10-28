@@ -95,4 +95,24 @@
     <string name="about_text">Build %1$d\n\nSupport the project, questions and bug reports:\n%2$s</string>
     <string name="write_email">Email</string>
     <string name="copy">Copy</string>
+    <string name="menu_connection">Connection settings</string>
+    <string name="choose_connection">How to connect?</string>
+    <string name="conn_ssh">SSH server (your own)</string>
+    <string name="conn_proxy">Public proxy from a list</string>
+    <string name="proxy_list_title">Public proxies</string>
+    <string name="proxy_load_failed">Couldn\'t load the list: %s</string>
+    <string name="proxy_empty">No working proxies for this country right now</string>
+    <string name="proxy_all">All</string>
+    <string name="proxy_meta">%1$s · %2$s · uptime %3$d%%</string>
+    <string name="proxy_ms">%d ms</string>
+    <string name="anon_transparent">transparent</string>
+    <string name="anon_anonymous">anonymous</string>
+    <string name="anon_elite">elite</string>
+    <string name="proxy_warning_title">About public proxies</string>
+    <string name="proxy_warning">Public proxies are run by strangers. They are often slow, stop working without notice and can see which sites you open. The content of HTTPS pages stays encrypted. Don\'t sign in to important accounts through them.</string>
+    <string name="got_it">Got it</string>
+    <string name="err_proxy_dead">The proxy doesn\'t respond</string>
+    <string name="refresh">Refresh</string>
+    <string name="change_proxy">Change proxy</string>
+    <string name="proxy_selected">Proxy: %s</string>
 </resources>

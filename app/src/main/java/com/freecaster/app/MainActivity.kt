@@ -54,6 +54,9 @@ import com.google.android.gms.cast.framework.CastButtonFactory
 import com.google.android.gms.cast.framework.CastContext
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.bottomsheet.BottomSheetDialog
+import com.google.android.material.card.MaterialCardView
+import com.google.android.material.chip.Chip
+import com.google.android.material.chip.ChipGroup
 import com.google.android.material.color.MaterialColors
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
@@ -541,7 +544,7 @@ class MainActivity : AppCompatActivity() {
             v.setOnClickListener { onTunnelClick() }
             // Long press: status, settings, "Retry"
             v.setOnLongClickListener {
-                if (SshSettings.load(this) == null) showSshSettings(connectAfter = true) else showTunnelStatus()
+                if (!ConnectionSettings.isConfigured(this)) showConnectionChooser(connectAfter = true) else showTunnelStatus()
                 true
             }
         }
@@ -564,7 +567,7 @@ class MainActivity : AppCompatActivity() {
             R.id.action_home -> web.loadUrl(HOME)
             R.id.action_remote -> startActivity(Intent(this, ExpandedControlsActivity::class.java))
             R.id.action_clear -> clearVideos()
-            R.id.action_ssh_settings -> showSshSettings(connectAfter = false)
+            R.id.action_ssh_settings -> showConnectionChooser(connectAfter = false)
             R.id.action_update -> checkUpdates()
             R.id.action_audio_phone -> AudioRelay.toggle(this)
             R.id.action_audio_delay -> AudioRelay.showDelayDialog(this)
@@ -677,7 +680,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun onTunnelClick() {
         when {
-            SshSettings.load(this) == null -> showSshSettings(connectAfter = true)
+            !ConnectionSettings.isConfigured(this) -> showConnectionChooser(connectAfter = true)
             !SshTunnel.isEnabled -> connectTunnel()
             // Needs a decision: whether to trust the new server key
             SshTunnel.status.hostKeyChanged -> showTunnelStatus()
@@ -696,12 +699,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun showTunnelStatus() {
         val st = SshTunnel.status
-        val cfg = SshSettings.load(this)
-        val msg = SshTunnel.describe(this, st) + (cfg?.let { "\n\n${it.user}@${it.host}:${it.port}" } ?: "")
+        val details = if (ConnectionSettings.mode(this) == ConnectionSettings.Mode.PROXY) {
+            ConnectionSettings.proxy(this)?.let { "${it.protocol.uppercase()} ${it.label}" }
+        } else {
+            SshSettings.load(this)?.let { "SSH ${it.user}@${it.host}:${it.port}" }
+        }
+        val msg = SshTunnel.describe(this, st) + (details?.let { "\n\n$it" } ?: "")
         val b = MaterialAlertDialogBuilder(this)
             .setTitle(R.string.ssh_tunnel)
             .setMessage(msg)
-            .setNeutralButton(R.string.settings) { _, _ -> showSshSettings(connectAfter = false) }
+            .setNeutralButton(R.string.settings) { _, _ -> showConnectionChooser(connectAfter = false) }
         if (SshTunnel.isEnabled) {
             b.setNegativeButton(R.string.disconnect) { _, _ -> SshTunnel.stop(this) { web.reload() } }
         }
@@ -740,6 +747,7 @@ class MainActivity : AppCompatActivity() {
                     return@setPositiveButton
                 }
                 SshSettings.save(this, cfg)
+                ConnectionSettings.setMode(this, ConnectionSettings.Mode.SSH)
                 when {
                     SshTunnel.isEnabled -> SshTunnel.restart(this)
                     connectAfter -> connectTunnel()
@@ -747,6 +755,140 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton(R.string.cancel, null)
             .show()
+    }
+
+    /** SSH server or a public proxy. */
+    private fun showConnectionChooser(connectAfter: Boolean) {
+        val current = if (ConnectionSettings.mode(this) == ConnectionSettings.Mode.PROXY) 1 else 0
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.choose_connection)
+            .setSingleChoiceItems(arrayOf(getString(R.string.conn_ssh), getString(R.string.conn_proxy)), current) { d, i ->
+                d.dismiss()
+                if (i == 0) showSshSettings(connectAfter) else showProxyList()
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun showProxyList() {
+        if (!ConnectionSettings.warned(this)) {
+            MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.proxy_warning_title)
+                .setMessage(R.string.proxy_warning)
+                .setPositiveButton(R.string.got_it) { _, _ ->
+                    ConnectionSettings.setWarned(this)
+                    showProxyList()
+                }
+                .setNegativeButton(R.string.cancel, null)
+                .show()
+            return
+        }
+        val sheet = BottomSheetDialog(this)
+        val view = layoutInflater.inflate(R.layout.sheet_proxies, null)
+        val chips = view.findViewById<ChipGroup>(R.id.proxy_countries)
+        val progress = view.findViewById<LinearProgressIndicator>(R.id.proxy_progress)
+        val message = view.findViewById<TextView>(R.id.proxy_message)
+        val items = view.findViewById<LinearLayout>(R.id.proxy_items)
+        var loadGen = 0
+
+        fun pick(p: PublicProxy) {
+            sheet.dismiss()
+            ConnectionSettings.setProxy(this, p)
+            ConnectionSettings.setMode(this, ConnectionSettings.Mode.PROXY)
+            toast(getString(R.string.proxy_selected, p.label))
+            if (SshTunnel.isEnabled) SshTunnel.restart(this) else connectTunnel()
+        }
+
+        fun show(list: List<PublicProxy>) {
+            items.removeAllViews()
+            val selected = ConnectionSettings.proxy(this)
+            for (p in list) {
+                val item = layoutInflater.inflate(R.layout.item_video, items, false) as MaterialCardView
+                item.findViewById<TextView>(R.id.video_kind).text = p.protocol.uppercase()
+                item.findViewById<TextView>(R.id.video_title).text =
+                    listOf(flag(p.country), p.city.ifEmpty { p.country }).filter { it.isNotEmpty() }.joinToString(" ")
+                        .ifEmpty { p.ip }
+                item.findViewById<TextView>(R.id.video_host).text =
+                    getString(R.string.proxy_meta, p.address, anonymityLabel(p.anonymity), p.uptime)
+                item.findViewById<TextView>(R.id.video_duration).apply {
+                    if (p.timeoutMs > 0) {
+                        text = getString(R.string.proxy_ms, p.timeoutMs)
+                        val c = when {
+                            p.timeoutMs < 1_500 -> R.color.tunnel_ok
+                            p.timeoutMs < 4_000 -> R.color.tunnel_wait
+                            else -> R.color.tunnel_error
+                        }
+                        setTextColor(ContextCompat.getColor(context, c))
+                    }
+                }
+                if (selected != null && p.ip == selected.ip && p.port == selected.port) {
+                    item.strokeWidth = (2 * resources.displayMetrics.density).toInt()
+                    item.strokeColor = MaterialColors.getColor(item, com.google.android.material.R.attr.colorPrimary)
+                }
+                item.setOnClickListener { pick(p) }
+                items.addView(item)
+            }
+        }
+
+        fun load(country: String) {
+            val gen = ++loadGen
+            progress.visibility = View.VISIBLE
+            message.visibility = View.GONE
+            items.removeAllViews()
+            thread {
+                val result = runCatching { PublicProxies.fetch(country) }
+                runOnUiThread {
+                    if (gen != loadGen || !sheet.isShowing) return@runOnUiThread
+                    progress.visibility = View.GONE
+                    result.onSuccess { list ->
+                        if (list.isEmpty()) {
+                            message.visibility = View.VISIBLE
+                            message.setText(R.string.proxy_empty)
+                        } else show(list)
+                    }.onFailure {
+                        message.visibility = View.VISIBLE
+                        message.text = getString(R.string.proxy_load_failed, it.message)
+                    }
+                }
+            }
+        }
+
+        val countries = listOf("ua", "pl", "de", "nl", "us", "")
+        var country = ConnectionSettings.country(this).takeIf { it in countries } ?: "ua"
+        for (c in countries) {
+            val chip = Chip(this).apply {
+                id = View.generateViewId()
+                text = if (c.isEmpty()) getString(R.string.proxy_all) else "${flag(c)} ${c.uppercase()}"
+                isCheckable = true
+                isChecked = c == country
+                setOnClickListener {
+                    if (c != country) {
+                        country = c
+                        ConnectionSettings.setCountry(this@MainActivity, c)
+                        load(c)
+                    }
+                }
+            }
+            chips.addView(chip)
+        }
+        view.findViewById<Button>(R.id.proxy_refresh).setOnClickListener { load(country) }
+
+        sheet.setContentView(view)
+        sheet.show()
+        load(country)
+    }
+
+    /** "ua" → 🇺🇦 */
+    private fun flag(code: String): String {
+        if (code.length != 2) return ""
+        return code.uppercase().map { String(Character.toChars(0x1F1E6 + (it - 'A'))) }.joinToString("")
+    }
+
+    private fun anonymityLabel(a: String) = when (a.lowercase()) {
+        "transparent" -> getString(R.string.anon_transparent)
+        "anonymous" -> getString(R.string.anon_anonymous)
+        "elite" -> getString(R.string.anon_elite)
+        else -> a
     }
 
     /**
