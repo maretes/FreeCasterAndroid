@@ -11,15 +11,31 @@ android {
         applicationId = "com.freecaster.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1"
+        // Номер збірки GitHub Actions: по ньому додаток розуміє, що є оновлення
+        val build = (project.findProperty("buildNumber") as String?)?.toIntOrNull() ?: 1
+        versionCode = build
+        versionName = "0.1.$build"
+    }
+
+    // Постійний ключ із секретів GitHub. Без нього оновлення не встановиться поверх старої версії
+    val keystore = System.getenv("KEYSTORE_PATH")
+    signingConfigs {
+        create("release") {
+            if (keystore != null) {
+                storeFile = file(keystore)
+                storeType = "pkcs12"
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = "freecaster"
+                keyPassword = System.getenv("KEYSTORE_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            // Підписуємо debug-ключем, щоб release APK можна було одразу встановити
-            signingConfig = signingConfigs.getByName("debug")
+            // Без секрету підписуємо debug-ключем, щоб APK усе одно можна було встановити
+            signingConfig = signingConfigs.getByName(if (keystore != null) "release" else "debug")
         }
     }
     compileOptions {

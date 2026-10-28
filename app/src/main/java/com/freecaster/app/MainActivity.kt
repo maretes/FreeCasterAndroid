@@ -12,6 +12,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
+import android.provider.Settings
 import android.view.KeyEvent
 import android.view.Menu
 import android.view.MenuItem
@@ -52,6 +53,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
 import com.google.android.material.progressindicator.LinearProgressIndicator
 import com.google.android.material.textfield.TextInputEditText
+import kotlin.concurrent.thread
 
 class MainActivity : AppCompatActivity() {
 
@@ -508,6 +510,7 @@ class MainActivity : AppCompatActivity() {
             R.id.action_remote -> startActivity(Intent(this, ExpandedControlsActivity::class.java))
             R.id.action_clear -> clearVideos()
             R.id.action_ssh_settings -> showSshSettings(connectAfter = false)
+            R.id.action_update -> checkUpdates()
             R.id.action_adblock -> {
                 adBlock = !adBlock
                 item.isChecked = adBlock
@@ -517,6 +520,63 @@ class MainActivity : AppCompatActivity() {
             else -> return super.onOptionsItemSelected(item)
         }
         return true
+    }
+
+    // ---------------- Оновлення ----------------
+
+    private fun checkUpdates() {
+        toast("Перевіряю оновлення…")
+        thread {
+            val rel = runCatching { Updater.fetchLatest() }
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                val r = rel.getOrElse {
+                    toast("Не вдалося перевірити оновлення: ${it.message}")
+                    return@runOnUiThread
+                }
+                val current = Updater.currentBuild(this)
+                if (r.build <= current) {
+                    toast("У вас остання версія (збірка $current)")
+                    return@runOnUiThread
+                }
+                val size = if (r.size > 0) " · ${formatBytes(r.size)}" else ""
+                MaterialAlertDialogBuilder(this)
+                    .setTitle("Доступна збірка ${r.build}")
+                    .setMessage("Зараз встановлена збірка $current$size\n\n${r.notes.ifEmpty { "Без опису" }}")
+                    .setPositiveButton("Оновити") { _, _ -> startUpdate(r) }
+                    .setNegativeButton("Пізніше", null)
+                    .show()
+            }
+        }
+    }
+
+    private fun startUpdate(r: Updater.Release) {
+        if (!packageManager.canRequestPackageInstalls()) {
+            // Дозвіл дається один раз, далі оновлення в один дотик
+            toast("Дозвольте FreeCaster встановлювати додатки, поверніться і натисніть «Оновити» ще раз")
+            startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+            return
+        }
+        val bar = LinearProgressIndicator(this).apply {
+            max = 100
+            setPadding(64, 32, 64, 0)
+        }
+        val dlg = MaterialAlertDialogBuilder(this)
+            .setTitle("Завантаження збірки ${r.build}")
+            .setView(bar)
+            .setCancelable(false)
+            .show()
+        thread {
+            try {
+                Updater.install(this, r) { p -> runOnUiThread { bar.setProgressCompat(p, true) } }
+                runOnUiThread { dlg.dismiss() }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    dlg.dismiss()
+                    toast("Помилка оновлення: ${e.message}")
+                }
+            }
+        }
     }
 
     // ---------------- SSH-тунель ----------------

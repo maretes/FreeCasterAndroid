@@ -19,5 +19,6 @@
     <item android:id="@+id/action_remote" android:title="Пульт" app:showAsAction="never" />
     <item android:id="@+id/action_adblock" android:title="Блокувати рекламу" android:checkable="true" app:showAsAction="never" />
     <item android:id="@+id/action_ssh_settings" android:title="Налаштування SSH" app:showAsAction="never" />
+    <item android:id="@+id/action_update" android:title="Перевірити оновлення" app:showAsAction="never" />
     <item android:id="@+id/action_clear" android:title="Очистити знайдені відео" app:showAsAction="never" />
 </menu>
