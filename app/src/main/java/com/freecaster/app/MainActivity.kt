@@ -614,8 +614,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openExternal(v: DetectedVideo) {
+        // Other players fetch the link without the site's Referer/Cookie and bypass the tunnel,
+        // so sites refuse them. Hand them the local proxy address, which adds both.
+        ProxyService.start(this)
+        val url = StreamProxy.proxify("127.0.0.1", v.url, v.headers, v.kind.mime)
         try {
-            startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse(v.url), v.kind.mime))
+            startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse(url), v.kind.mime))
         } catch (e: Exception) {
             toast(getString(R.string.no_player))
         }
