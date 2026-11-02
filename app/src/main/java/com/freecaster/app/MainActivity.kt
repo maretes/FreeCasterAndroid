@@ -523,7 +523,8 @@ class MainActivity : AppCompatActivity() {
         action(R.drawable.ic_cast, R.string.action_cast) { cast(v, viaPhone = false) }
         action(R.drawable.ic_phone, R.string.action_cast_phone) { cast(v, viaPhone = true) }
         action(R.drawable.ic_tv, R.string.action_dlna) { showDlnaPicker(v) }
-        action(R.drawable.ic_open, R.string.action_open) { openExternal(v) }
+        action(R.drawable.ic_play, R.string.action_open) { PlayerActivity.start(this, v) }
+        action(R.drawable.ic_open, R.string.action_open_other) { openExternal(v) }
         action(R.drawable.ic_copy, R.string.action_copy) { copy(v.url) }
         sheet.setContentView(view)
         sheet.show()
@@ -614,12 +615,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openExternal(v: DetectedVideo) {
-        // Other players fetch the link without the site's Referer/Cookie and bypass the tunnel,
-        // so sites refuse them. Hand them the local proxy address, which adds both.
-        ProxyService.start(this)
-        val url = StreamProxy.proxify("127.0.0.1", v.url, v.headers, v.kind.mime)
+        // The direct link, as the browser has it (Google Photos and others refuse plain http).
+        // With the tunnel on it goes via the local proxy instead, so the video never bypasses the tunnel.
+        val url = if (SshTunnel.isEnabled) {
+            ProxyService.start(this)
+            StreamProxy.proxify("127.0.0.1", v.url, v.headers, v.kind.mime)
+        } else v.url
+        val view = Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse(url), v.kind.mime)
         try {
-            startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse(url), v.kind.mime))
+            startActivity(Intent.createChooser(view, getString(R.string.action_open_other)))
         } catch (e: Exception) {
             toast(getString(R.string.no_player))
         }

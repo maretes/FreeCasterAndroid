@@ -13,7 +13,9 @@
     <string name="live">LIVE</string>
     <string name="action_cast">Cast to Chromecast</string>
     <string name="action_cast_phone">Cast via phone (if it won\'t play)</string>
-    <string name="action_open">Open in a player on the phone</string>
+    <string name="action_open">Play on the phone</string>
+    <string name="action_open_other">Open in another app</string>
+    <string name="player_error">Can\'t play the video (%s)</string>
     <string name="action_copy">Copy link</string>
     <string name="pick_chromecast">Tap the cast icon at the top and pick a Chromecast first</string>
     <string name="same_wifi">The phone must be on the same Wi-Fi network as the Chromecast</string>

@@ -11,7 +11,9 @@
     <string name="live">LIVE</string>
     <string name="action_cast">Транслювати на Chromecast</string>
     <string name="action_cast_phone">Через телефон (якщо не грає)</string>
-    <string name="action_open">Відкрити в плеєрі на телефоні</string>
+    <string name="action_open">Дивитися на телефоні</string>
+    <string name="action_open_other">Відкрити в іншому додатку</string>
+    <string name="player_error">Не вдається відтворити відео (%s)</string>
     <string name="action_copy">Копіювати посилання</string>
     <string name="pick_chromecast">Спочатку натисніть значок трансляції вгорі й виберіть Chromecast</string>
     <string name="same_wifi">Телефон має бути в тій самій Wi-Fi мережі, що й Chromecast</string>
